@@ -92,7 +92,7 @@
 - [x] Directory skeleton (`src`, `test`, `scripts`, `data`, `docs`) created with placeholder files.
 - [x] Build system committed; a trivial `main()` prints `SthirDB` version + usage when `./build/sthirdb` runs.
 - [x] Anchor paper (ARIES) PDF downloaded to `docs/papers/` and citation recorded in `docs/scope.md`.
-- [ ] Yuan 2026 paper PDF downloaded to `docs/papers/` (already in repo root as `itmconf_cfctcc2026_04015.pdf`). — *blocked: publisher returns HTTP 403 to automated downloads; needs one manual browser save (see `docs/scope.md`)*
+- [x] Yuan 2026 paper PDF downloaded to `docs/papers/` (already in repo root as `itmconf_cfctcc2026_04015.pdf`).
 - [x] **Single report started:** `docs/report.md` created with the locked section skeleton from the Single-Report Policy (§0–§12) plus an empty `docs/evidence/` directory; a repo-wide check finds **no other** report files.
 - [x] Whiteboard/paged ER diagram of the retail domain sketched and photographed into `docs/` — *delivered as the Mermaid sketch `docs/er_diagram.md`*
 - [x] **Verify:** fresh clone → `make` → `./build/sthirdb` prints usage, exit code 0.

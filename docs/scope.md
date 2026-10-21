@@ -27,6 +27,6 @@ The project produces exactly one report for the whole project: `docs/report.md`.
 ## Anchor papers (citations)
 
 - **ARIES** — C. Mohan, F. Haderle, B. Lindsay, H. Pirahesh, P. Schwarz. "ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging." *ACM Transactions on Database Systems* 17(1), 1992. DOI: 10.1145/128765.128770. PDF: `docs/papers/aries.pdf`.
-- **Yuan 2026** — Z. Yuan. "A Constraint-Driven Relational Database Framework for Robust Digital Retail Management." *ITM Web of Conferences* 91, 04015 (2026). DOI: 10.1051/itmconf/20269104015. Open access (CC-BY) at the DOI. **PDF pending manual download:** the publisher's site returns HTTP 403 to all automated clients, so `docs/papers/yuan2026.pdf` must be saved once from a browser.
+- **Yuan 2026** — Z. Yuan. "A Constraint-Driven Relational Database Framework for Robust Digital Retail Management." *ITM Web of Conferences* 91, 04015 (2026). DOI: 10.1051/itmconf/20269104015. Open access (CC-BY). PDF: `docs/papers/itmconf_cfctcc2026_04015.pdf`.
 
 Further references (Leis 2015, LEON 2023, textbooks) are listed in `plan.md` § Reference List and will be filed in `docs/report.md` §12.
