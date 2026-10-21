@@ -88,14 +88,14 @@
 - Download and store the anchor paper + Yuan paper in `/docs/papers/`.
 
 ### Checklist
-- [ ] Git repo created; `.gitignore` covers `/build`, `/data`, `*.log`, editor files.
-- [ ] Directory skeleton (`src`, `test`, `scripts`, `data`, `docs`) created with placeholder files.
-- [ ] Build system committed; a trivial `main()` prints `SthirDB` version + usage when `./build/sthirdb` runs.
-- [ ] Anchor paper (ARIES) PDF downloaded to `docs/papers/` and citation recorded in `docs/scope.md`.
-- [ ] Yuan 2026 paper PDF downloaded to `docs/papers/` (already in repo root as `itmconf_cfctcc2026_04015.pdf`).
-- [ ] **Single report started:** `docs/report.md` created with the locked section skeleton from the Single-Report Policy (§0–§12) plus an empty `docs/evidence/` directory; a repo-wide check finds **no other** report files.
-- [ ] Whiteboard/paged ER diagram of the retail domain sketched and photographed into `docs/`.
-- [ ] **Verify:** fresh clone → `make` → `./build/sthirdb` prints usage, exit code 0.
+- [x] Git repo created; `.gitignore` covers `/build`, `/data`, `*.log`, editor files.
+- [x] Directory skeleton (`src`, `test`, `scripts`, `data`, `docs`) created with placeholder files.
+- [x] Build system committed; a trivial `main()` prints `SthirDB` version + usage when `./build/sthirdb` runs.
+- [x] Anchor paper (ARIES) PDF downloaded to `docs/papers/` and citation recorded in `docs/scope.md`.
+- [ ] Yuan 2026 paper PDF downloaded to `docs/papers/` (already in repo root as `itmconf_cfctcc2026_04015.pdf`). — *blocked: publisher returns HTTP 403 to automated downloads; needs one manual browser save (see `docs/scope.md`)*
+- [x] **Single report started:** `docs/report.md` created with the locked section skeleton from the Single-Report Policy (§0–§12) plus an empty `docs/evidence/` directory; a repo-wide check finds **no other** report files.
+- [x] Whiteboard/paged ER diagram of the retail domain sketched and photographed into `docs/` — *delivered as the Mermaid sketch `docs/er_diagram.md`*
+- [x] **Verify:** fresh clone → `make` → `./build/sthirdb` prints usage, exit code 0.
 
 ---
 
@@ -115,21 +115,21 @@
 - **Verification:** a stress test that writes 5,000 rows across many pages with a buffer pool of only 64 frames (i.e., forced eviction cycles), then reads them all back and checks integrity.
 
 ### Checklist
-- [ ] `Page` class with header layout and 8 KB payload defined.
-- [ ] Page file read/write at correct byte offsets implemented and unit-tested.
-- [ ] Slot-directory (slotted page) insert/tombstone/compact operations implemented.
-- [ ] Row serialize/deserialize for the initial fixed schema implemented and round-trip tested.
-- [ ] Disk manager: `read_page`, `write_page`, `allocate_page` implemented and tested.
-- [ ] Buffer pool frame array + `page_id → frame_id` map implemented.
-- [ ] Pin/unpin counters implemented; `fetch_page`/`unpin_page` API exposed and thread-safe guarded by a latch.
-- [ ] Replacer interface implemented with an LRU policy.
-- [ ] Dirty-page flagging and writeback-on-evict implemented.
-- [ ] `init_schema` CLI command creates the table file and initializes the buffer pool.
-- [ ] `load_data --rows N` CLI command bulk-inserts N rows.
-- [ ] Stress test: 5,000 rows written with a 64-frame pool; all rows read back correctly.
-- [ ] **Verify:** `./build/sthirdb init_schema && ./build/sthirdb load_data --rows 5000` exits 0; a follow-up count query returns exactly 5000.
-- [ ] **Report contribution (single report, §4 first draft):** page format + buffer-pool design written into `docs/report.md`, with the 5,000-row/64-frame stress numbers saved to `docs/evidence/`.
-- [ ] Phase committed and `./data/` backed up.
+- [x] `Page` class with header layout and 8 KB payload defined.
+- [x] Page file read/write at correct byte offsets implemented and unit-tested.
+- [x] Slot-directory (slotted page) insert/tombstone/compact operations implemented.
+- [x] Row serialize/deserialize for the initial fixed schema implemented and round-trip tested.
+- [x] Disk manager: `read_page`, `write_page`, `allocate_page` implemented and tested.
+- [x] Buffer pool frame array + `page_id → frame_id` map implemented.
+- [x] Pin/unpin counters implemented; `fetch_page`/`unpin_page` API exposed and thread-safe guarded by a latch.
+- [x] Replacer interface implemented with an LRU policy.
+- [x] Dirty-page flagging and writeback-on-evict implemented.
+- [x] `init_schema` CLI command creates the table file and initializes the buffer pool.
+- [x] `load_data --rows N` CLI command bulk-inserts N rows.
+- [x] Stress test: 5,000 rows written with a 64-frame pool; all rows read back correctly.
+- [x] **Verify:** `./build/sthirdb init_schema && ./build/sthirdb load_data --rows 5000` exits 0; a follow-up count query returns exactly 5000.
+- [x] **Report contribution (single report, §4 first draft):** page format + buffer-pool design written into `docs/report.md`, with the 5,000-row/64-frame stress numbers saved to `docs/evidence/`.
+- [ ] Phase committed and `./data/` backed up. — *phase committed; `./data/` is gitignored, external backup destination still to be chosen*
 
 ---
 
