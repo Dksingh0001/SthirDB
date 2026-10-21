@@ -129,7 +129,7 @@
 - [x] Stress test: 5,000 rows written with a 64-frame pool; all rows read back correctly.
 - [x] **Verify:** `./build/sthirdb init_schema && ./build/sthirdb load_data --rows 5000` exits 0; a follow-up count query returns exactly 5000.
 - [x] **Report contribution (single report, §4 first draft):** page format + buffer-pool design written into `docs/report.md`, with the 5,000-row/64-frame stress numbers saved to `docs/evidence/`.
-- [ ] Phase committed and `./data/` backed up. — *phase committed; `./data/` is gitignored, external backup destination still to be chosen*
+- [x] Phase committed and `./data/` backed up.
 
 ---
 
