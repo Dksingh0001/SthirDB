@@ -1,0 +1,16 @@
+# Build output
+/build/
+
+# Runtime data (engine-managed; never committed)
+/data/
+
+# Logs
+*.log
+
+# Editor / OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
