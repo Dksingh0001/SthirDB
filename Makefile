@@ -9,7 +9,7 @@ OBJS := $(patsubst %.cpp,$(BUILD)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 
 # Tests link everything except the CLI entry point.
-STORAGE_OBJS := $(filter-out $(BUILD)/main.o,$(OBJS))
+STORAGE_OBJS := $(filter-out %/main.o,$(OBJS))
 TEST_SRCS    := $(wildcard test/*.cpp)
 TEST_BINS    := $(patsubst test/%.cpp,$(BUILD)/%,$(TEST_SRCS))
 
