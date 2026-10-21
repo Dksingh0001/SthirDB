@@ -76,6 +76,9 @@ int Page::InsertTuple(const char* bytes, uint16_t len) {
 
   const int reuse = find_tombstone();
   const uint16_t dir_end = slot_dir_end();
+  // Defensive: a zeroed (never initialized) page has free_space_ptr == 0,
+  // which would underflow the subtraction below.
+  if (free_space_ptr() < dir_end) return -1;
   const uint16_t free_bytes = static_cast<uint16_t>(free_space_ptr() - dir_end);
   const uint16_t extra = (reuse >= 0) ? 0 : static_cast<uint16_t>(kSlotEntrySize);
   if (free_bytes < static_cast<uint16_t>(len + extra)) return -1;
