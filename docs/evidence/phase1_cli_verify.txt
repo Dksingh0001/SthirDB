@@ -1,0 +1,6 @@
+$ ./build/sthirdb init_schema
+init_schema: table Items ready at ./data/retail/items.dat (1 page(s), first page created)
+$ ./build/sthirdb load_data --rows 5000
+load_data: inserted 5000 row(s) into Items; file now 41 page(s)
+$ ./build/sthirdb count
+count: 5000 live row(s) in Items (5000 physical tuple(s), 41 page(s))
