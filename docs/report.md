@@ -91,14 +91,16 @@ The disk manager exposes `read_page`, `write_page`, and `allocate_page`. Every p
 
 ### 4.4 Stress verification (Phase 1)
 
-A stress test writes 5,000 rows through the buffer pool and reads every row back, checking each field. Two pool sizes were run: the specified 64-frame pool, and an 8-frame pool that forces continuous eviction (write-back and reload on every pass over the data). Results:
+A stress test writes 5,000 rows through the buffer pool and reads every page back, verifying `id`, `name`, `price`, and the delete flag on every tuple. Two pool sizes were run: the specified 64-frame pool (41 pages of data, so the pool is large enough to hold the whole table), and an 8-frame pool that forces continuous eviction — every pass over the data writes dirty victims back and reloads them (Table 1).
 
-| Test | Frames | Rows written | Rows verified | Outcome |
-|---|---|---|---|---|
-| Stress A (spec pool) | 64 | 5000 | 5000 | PASS |
-| Stress B (forced eviction) | 8 | 5000 | 5000 | PASS |
+**Table 1.** Phase 1 stress results (raw log: `docs/evidence/phase1_tests.txt`).
 
-Raw output: `docs/evidence/phase1_stress.txt`; unit-test log: `docs/evidence/phase1_tests.txt`.
+| Test | Frames | Rows | Pages | Write (ms) | Read+verify (ms) | Verified | Mismatches | Outcome |
+|---|---|---|---|---|---|---|---|---|
+| Stress A (spec pool) | 64 | 5000 | 41 | 0.81 | 0.23 | 5000 | 0 | PASS |
+| Stress B (forced eviction) | 8 | 5000 | 41 | 0.65 | 0.25 | 5000 | 0 | PASS |
+
+The end-to-end CLI check (`init_schema`, `load_data --rows 5000`, `count`) exits 0 and `count` returns exactly 5000 (`docs/evidence/phase1_cli_verify.txt`). All 21 unit tests pass (`docs/evidence/phase1_tests.txt`). One honest note: with 5,000 rows the table occupies only 41 pages, so the 64-frame run never evicts — the 8-frame run exists specifically to exercise eviction cycles and dirty writeback.
 
 > **Plain-English summary**
 > - A page is an 8 KB block with a 16-byte header, a slot directory up front, and tuples packed at the back.
