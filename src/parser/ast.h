@@ -23,6 +23,7 @@ class Expr {
  public:
   virtual ~Expr() = default;
   virtual ExprType type() const = 0;
+  virtual std::unique_ptr<Expr> Clone() const = 0;
 };
 
 class LiteralExpr : public Expr {
@@ -57,6 +58,15 @@ class LiteralExpr : public Expr {
   }
 
   ExprType type() const override { return ExprType::LITERAL; }
+  std::unique_ptr<Expr> Clone() const override {
+    switch (lit_type_) {
+      case LitType::INT: return MakeInt(int_val_);
+      case LitType::DECIMAL: return MakeDecimal(decimal_val_);
+      case LitType::STRING: return MakeString(str_val_);
+      case LitType::NULL_VAL: return MakeNull();
+    }
+    return MakeNull();
+  }
   LitType lit_type() const { return lit_type_; }
   int64_t int_val() const { return int_val_; }
   double decimal_val() const { return decimal_val_; }
@@ -75,6 +85,9 @@ class ColumnRefExpr : public Expr {
       : table_name_(std::move(table_name)), column_name_(std::move(column_name)) {}
 
   ExprType type() const override { return ExprType::COLUMN_REF; }
+  std::unique_ptr<Expr> Clone() const override {
+    return std::make_unique<ColumnRefExpr>(table_name_, column_name_);
+  }
   const std::string& table_name() const { return table_name_; }
   const std::string& column_name() const { return column_name_; }
 
@@ -91,6 +104,9 @@ class UnaryExpr : public Expr {
       : op_(op), expr_(std::move(expr)) {}
 
   ExprType type() const override { return ExprType::UNARY_OP; }
+  std::unique_ptr<Expr> Clone() const override {
+    return std::make_unique<UnaryExpr>(op_, expr_ ? expr_->Clone() : nullptr);
+  }
   UnaryOp op() const { return op_; }
   const Expr* expr() const { return expr_.get(); }
   std::unique_ptr<Expr>& expr() { return expr_; }
@@ -112,6 +128,9 @@ class BinaryExpr : public Expr {
       : op_(op), left_(std::move(left)), right_(std::move(right)) {}
 
   ExprType type() const override { return ExprType::BINARY_OP; }
+  std::unique_ptr<Expr> Clone() const override {
+    return std::make_unique<BinaryExpr>(op_, left_ ? left_->Clone() : nullptr, right_ ? right_->Clone() : nullptr);
+  }
   BinaryOp op() const { return op_; }
   const Expr* left() const { return left_.get(); }
   const Expr* right() const { return right_.get(); }
@@ -130,6 +149,9 @@ class IsNullExpr : public Expr {
       : expr_(std::move(expr)), is_not_(is_not) {}
 
   ExprType type() const override { return ExprType::IS_NULL_EXPR; }
+  std::unique_ptr<Expr> Clone() const override {
+    return std::make_unique<IsNullExpr>(expr_ ? expr_->Clone() : nullptr, is_not_);
+  }
   const Expr* expr() const { return expr_.get(); }
   bool is_not() const { return is_not_; }
 
@@ -146,6 +168,9 @@ class AggregateExpr : public Expr {
       : func_(func), is_star_(is_star), arg_(std::move(arg)) {}
 
   ExprType type() const override { return ExprType::AGGREGATE; }
+  std::unique_ptr<Expr> Clone() const override {
+    return std::make_unique<AggregateExpr>(func_, is_star_, arg_ ? arg_->Clone() : nullptr);
+  }
   AggFunc func() const { return func_; }
   bool is_star() const { return is_star_; }
   const Expr* arg() const { return arg_.get(); }

@@ -115,6 +115,37 @@ DataType DeduceExprType(const Expr* expr, const TableSchema& schema) {
   return DataType::INT;
 }
 
+bool ValidateExprColumns(const Expr* expr, const TableSchema& schema, std::string* err) {
+  if (!expr) return true;
+  if (expr->type() == ExprType::COLUMN_REF) {
+    const auto* cr = static_cast<const ColumnRefExpr*>(expr);
+    if (schema.FindColumnIndex(cr->column_name()) < 0) {
+      if (err) *err = "unknown column '" + cr->column_name() + "'";
+      return false;
+    }
+    return true;
+  }
+  if (expr->type() == ExprType::UNARY_OP) {
+    return ValidateExprColumns(static_cast<const UnaryExpr*>(expr)->expr(), schema, err);
+  }
+  if (expr->type() == ExprType::BINARY_OP) {
+    const auto* b = static_cast<const BinaryExpr*>(expr);
+    return ValidateExprColumns(b->left(), schema, err) &&
+           ValidateExprColumns(b->right(), schema, err);
+  }
+  if (expr->type() == ExprType::IS_NULL_EXPR) {
+    return ValidateExprColumns(static_cast<const IsNullExpr*>(expr)->expr(), schema, err);
+  }
+  if (expr->type() == ExprType::AGGREGATE) {
+    const auto* agg = static_cast<const AggregateExpr*>(expr);
+    if (!agg->is_star() && agg->arg()) {
+      return ValidateExprColumns(agg->arg(), schema, err);
+    }
+    return true;
+  }
+  return true;
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::CreatePlan(const SQLStatement& stmt, std::string* err) {
@@ -169,6 +200,12 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
       merged_schema.columns.push_back(col);
     }
 
+    if (stmt.join_predicate) {
+      if (!ValidateExprColumns(stmt.join_predicate.get(), merged_schema, err)) {
+        return nullptr;
+      }
+    }
+
     current_plan = std::make_unique<NestedLoopJoinPlan>(
         CloneExpr(stmt.join_predicate.get()),
         std::move(current_plan),
@@ -177,8 +214,20 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
     current_schema = merged_schema;
   }
 
+  // Validate columns in SELECT list
+  if (!stmt.is_select_all) {
+    for (const auto& item : stmt.select_list) {
+      if (!ValidateExprColumns(item.expr.get(), current_schema, err)) {
+        return nullptr;
+      }
+    }
+  }
+
   // Handle WHERE
   if (stmt.where_clause) {
+    if (!ValidateExprColumns(stmt.where_clause.get(), current_schema, err)) {
+      return nullptr;
+    }
     current_plan = std::make_unique<FilterPlan>(
         CloneExpr(stmt.where_clause.get()),
         std::move(current_plan));

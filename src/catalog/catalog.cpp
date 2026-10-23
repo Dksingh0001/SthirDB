@@ -32,11 +32,36 @@ std::optional<DataType> StringToDataType(const std::string& str) {
 int TableSchema::FindColumnIndex(const std::string& col_name) const {
   std::string target = col_name;
   for (char& c : target) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  // 1. Exact match (case-insensitive)
   for (size_t i = 0; i < columns.size(); ++i) {
     std::string cur = columns[i].name;
     for (char& c : cur) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (cur == target) return static_cast<int>(i);
   }
+
+  // 2. Target has "table.col" -> match "col"
+  auto target_dot = target.find('.');
+  if (target_dot != std::string::npos) {
+    std::string col_only = target.substr(target_dot + 1);
+    for (size_t i = 0; i < columns.size(); ++i) {
+      std::string cur = columns[i].name;
+      for (char& c : cur) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (cur == col_only) return static_cast<int>(i);
+    }
+  }
+
+  // 3. Schema column has "table.col" -> match target
+  for (size_t i = 0; i < columns.size(); ++i) {
+    std::string cur = columns[i].name;
+    for (char& c : cur) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto cur_dot = cur.find('.');
+    if (cur_dot != std::string::npos) {
+      std::string col_only = cur.substr(cur_dot + 1);
+      if (col_only == target) return static_cast<int>(i);
+    }
+  }
+
   return -1;
 }
 
