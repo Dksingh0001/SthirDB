@@ -1,0 +1,64 @@
+﻿g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_buffer_pool test/test_buffer_pool.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_catalog test/test_catalog.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_disk_manager test/test_disk_manager.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_exec test/test_exec.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_page test/test_page.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_parser test/test_parser.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_row test/test_row.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_sql_integration test/test_sql_integration.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+g++ -std=c++17 -O2 -Wall -Wextra -pthread -Isrc -MMD -MP -o build/test_stress test/test_stress.cpp build/src/catalog/catalog.o build/src/common/crash.o build/src/exec/execution_engine.o build/src/exec/executors.o build/src/exec/expr_eval.o build/src/exec/value.o build/src/parser/lexer.o build/src/parser/parser.o build/src/planner/planner.o build/src/storage/buffer_pool.o build/src/storage/disk_manager.o build/src/storage/page.o build/src/storage/replacer.o
+== build/test_buffer_pool
+PASS replacer_lru_contract
+PASS buffer_pool_pin_protocol
+PASS buffer_pool_exhaustion
+PASS buffer_pool_dirty_writeback
+PASS buffer_pool_dirty_marking
+PASS buffer_pool_flush_all
+== build/test_catalog
+PASS catalog_create_and_lookup
+PASS catalog_validation_errors
+PASS catalog_persistence_across_restart
+== build/test_disk_manager
+PASS disk_allocate
+PASS disk_write_read_roundtrip
+PASS disk_offset_addressing
+PASS disk_reopen_persists
+PASS disk_read_beyond_eof
+== build/test_exec
+PASS 3vl_logic
+PASS tuple_serialization_roundtrip
+PASS filter_and_project_executors
+PASS aggregate_executor
+PASS sort_executor
+PASS nested_loop_join_executor
+== build/test_page
+PASS page_header_layout
+PASS page_insert_read_delete
+PASS page_fill_until_full
+PASS page_tombstone_compact
+== build/test_parser
+PASS parse_create_table
+PASS parse_create_table_with_constraints
+PASS parse_insert
+PASS parse_select
+PASS parse_select_aggregates_group_order_join
+PASS parse_update_delete
+PASS parse_transactions_and_utils
+PASS parse_precedence_and_parentheses
+PASS parse_errors
+== build/test_row
+PASS row_round_trip
+PASS row_fixed_name_field
+PASS row_deleted_flag
+PASS row_in_page
+== build/test_sql_integration
+PASS acceptance_examples
+PASS joins_aggregates_and_nulls
+PASS persistence_across_restart
+PASS transactions_and_utils
+PASS error_handling
+== build/test_stress
+stress[stress_64_frames]: frames=64 rows=5000 pages=41 write_ms=1.31 read_ms=0.25 verified=5000 mismatches=0
+PASS stress_64_frames
+stress[stress_8_frames_forced_eviction]: frames=8 rows=5000 pages=41 write_ms=0.96 read_ms=0.22 verified=5000 mismatches=0
+PASS stress_8_frames_forced_eviction

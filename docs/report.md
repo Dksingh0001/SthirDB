@@ -38,7 +38,110 @@ ACID, write-ahead logging (WAL), ARIES, optimizer basics, semantic query optimiz
 
 _Drafted in Phase 2._
 
-Architecture diagram: storage → buffer pool → executors → optimizer (including the constraint-aware rewrite) → WAL/recovery (plus crash-injection layer) → workload. Placeholder.
+This section describes the end-to-end software architecture of SthirDB and follows the complete lifecycle of a SQL query from user input to disk retrieval. SthirDB processes declarative SQL text through a classical layered DBMS architecture: tokenization, AST generation, semantic validation against a persistent catalog, translation into relational algebra, and demand-driven iterator execution over a pinned buffer pool.
+
+### 3.1 Architecture Diagram
+
+Figure 1 outlines the layered subsystem hierarchy delivered across Phases 0–2.
+
+```
+       +-----------------------------------------------------------+
+       |               Client CLI (sthirdb run "<sql>")            |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | SQL Lexer & Parser (Hand-written recursive descent)       |
+       |  - Tokenizer with source-location error reporting         |
+       |  - AST: DDL (CreateTable), DML (Insert/Update/Delete),    |
+       |        DQL (Select/Join/Agg/Sort), Control (Txn, Set)     |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | Catalog (./data/retail/catalog.json)                      |
+       |  - Table schemas, data types (INT, VARCHAR, DECIMAL)      |
+       |  - Declared constraints (PK, UNIQUE, CHECK, FK, NOT NULL) |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | Relational-Algebra Planner                                |
+       |  - Semantic resolution & schema derivation                |
+       |  - Plan nodes: SeqScan, Filter, Project, Aggregate,       |
+       |    Sort, NestedLoopJoin                                   |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | Volcano Execution Engine (Iterator: init / next / close)  |
+       |  - Three-valued logic (3VL: TRUE, FALSE, UNKNOWN)         |
+       |  - Hash aggregation (COUNT, SUM, AVG, MIN, MAX)           |
+       |  - In-memory multi-key sort (ASC / DESC)                  |
+       |  - Block nested-loop join with inner rescan               |
+       |  - DML execution with slot tombstones                     |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | Buffer Pool Manager (64 frames, LRU eviction replacer)    |
+       |  - Frame array, page-to-frame table, pin/unpin protocol   |
+       +-----------------------------------------------------------+
+                                     |
+                                     v
+       +-----------------------------------------------------------+
+       | Disk Manager (8 KB slotted pages in ./data/retail/*.dat)  |
+       |  - Positional pread/pwrite with crash-injection hook      |
+       +-----------------------------------------------------------+
+```
+**Figure 1.** SthirDB end-to-end query processing and storage architecture.
+
+### 3.2 Journey of a Query
+
+To understand how these components collaborate, consider the lifecycle of an acceptance query executed via `./build/sthirdb run`:
+
+```sql
+SELECT ItemName FROM Items WHERE RetailPrice > 5;
+```
+
+1. **Tokenization & Lexical Analysis:** The `Lexer` scans the input character stream and converts it into a sequence of strongly-typed tokens: `SELECT`, `IDENTIFIER("ItemName")`, `FROM`, `IDENTIFIER("Items")`, `WHERE`, `IDENTIFIER("RetailPrice")`, `GT(">")`, `INTEGER_LITERAL("5")`, `SEMICOLON`.
+2. **Parsing & AST Construction:** The hand-written recursive-descent `Parser` processes tokens according to grammar rules, enforcing operator precedence. It outputs a `SelectStmt` AST node containing a projection list (`ItemName`), a table source (`Items`), and a binary comparison expression (`RetailPrice > 5`).
+3. **Catalog Lookup & Semantic Analysis:** The `Planner` looks up `Items` in the persistent `Catalog` (`./data/retail/catalog.json`). It confirms the table exists, verifies that both `ItemName` and `RetailPrice` are valid columns, and determines their storage types (`VARCHAR(100)` and `DECIMAL`).
+4. **Relational-Algebra Planning:** The planner produces an executable plan tree composed of:
+   - `SeqScanPlan("Items")`: leaf node reading records from disk.
+   - `FilterPlan(predicate: RetailPrice > 5, child: SeqScan)`: filters records.
+   - `ProjectPlan(columns: [ItemName], child: Filter)`: extracts the requested output column.
+5. **Physical Execution (Volcano Iterator Model):** The `ExecutionEngine` instantiates the corresponding executor tree (`ProjectExecutor` -> `FilterExecutor` -> `SeqScanExecutor`) and calls `init()` on the root.
+6. **Buffer-Pool Access & Slotted-Page Deserialization:** When `FilterExecutor` calls `next()` on `SeqScanExecutor`:
+   - `SeqScanExecutor` pins page 0 via `BufferPool::fetch_page(0)`.
+   - For each active slot in the slotted page directory, it extracts the tuple bytes and deserializes the dynamic `Tuple` format, recording the record identifier (`RID{page_id, slot_id}`).
+   - Once all slots on the page are read, `unpin_page(0, false)` decrements the pin count, and the executor advances to page 1.
+7. **Predicate Evaluation with 3VL:** `FilterExecutor` evaluates `RetailPrice > 5` against each live tuple using three-valued logic. Comparisons involving `NULL` yield `UNKNOWN`, which the `WHERE` clause discards; only rows evaluating to `TRUE` pass to `ProjectExecutor`.
+8. **Result Formatting:** `ProjectExecutor` yields a tuple containing only `ItemName = 'Widget'`. The CLI engine calculates column widths and prints a clean ASCII table (raw output verified in `docs/evidence/phase2_cli_verify.txt`):
+   ```
+   +----------+
+   | ItemName |
+   +----------+
+   | Widget   |
+   +----------+
+   (1 row(s))
+   ```
+
+### 3.3 Definitions of Technical Terms
+
+- **AST (Abstract Syntax Tree):** A tree representation of the syntactic structure of source SQL text, abstracting away punctuation and formatting.
+- **Relational Algebra:** A formal mathematical query language consisting of relational operators (such as selection, projection, join, and aggregation) that define query semantics.
+- **Volcano Iterator Model:** A pipelined query execution architecture where operators communicate through a uniform `init()`, `next()`, and `close()` interface, pulling tuples one at a time on demand.
+- **Three-Valued Logic (3VL):** SQL's logical system with three truth states: `TRUE`, `FALSE`, and `UNKNOWN`. Comparisons with `NULL` evaluate to `UNKNOWN`, and `WHERE` filters preserve only rows evaluating to `TRUE`.
+- **Slotted Page:** An 8 KB page storage layout that places a growing slot directory at the front and appends variable-length tuples backward from the end, enabling stable row identifiers via slot indices.
+- **Constraint Declaration vs. Enforcement:** Storing declared data rules (such as `PRIMARY KEY`, `UNIQUE`, `CHECK`, and `FOREIGN KEY`) in the catalog during DDL parsing, while deferring runtime constraint violation checks to the transaction enforcement phase.
+
+> **Plain-English summary**
+> - SQL text is parsed into an AST without external dependencies and validated against a JSON table catalog.
+> - Queries are converted into relational algebra trees and executed using the demand-driven Volcano iterator model.
+> - SeqScan retrieves pages through the pinned 64-frame buffer pool and deserializes slotted-page records.
+> - Filtering strictly implements SQL three-valued logic (NULL comparisons yield UNKNOWN).
+> - All six Phase 2 acceptance statements execute successfully from the CLI with clean tabular output (`docs/evidence/phase2_cli_verify.txt`).
 
 ---
 
