@@ -197,7 +197,7 @@
 - **Integration:** an `IndexScan(table, index, predicate, child)` RA node; the optimizer picks it in Phase 4.
 
 ### Checklist
-- [ ] B+tree node page format (leaf + internal) implemented with serialize/deserialize.
+- [x] B+tree node page format (leaf + internal) implemented with serialize/deserialize.
 - [ ] Tree metadata (root page id, height, order) persisted in the catalog.
 - [ ] `insert(key, rid)` implemented with correct leaf insertion.
 - [ ] Leaf split + parent update implemented, including internal-node split.
