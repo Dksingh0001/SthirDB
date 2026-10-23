@@ -13,6 +13,54 @@
 #include "common/config.h"
 #include "common/crash.h"
 
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
+static ssize_t pread(int fd, void* buf, size_t count, int64_t offset) {
+  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return -1;
+  }
+  OVERLAPPED ov{};
+  ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFF);
+  ov.OffsetHigh = static_cast<DWORD>((offset >> 32) & 0xFFFFFFFF);
+  DWORD bytesRead = 0;
+  if (!ReadFile(h, buf, static_cast<DWORD>(count), &bytesRead, &ov)) {
+    DWORD err = GetLastError();
+    if (err == ERROR_HANDLE_EOF) return 0;
+    errno = EIO;
+    return -1;
+  }
+  return static_cast<ssize_t>(bytesRead);
+}
+
+static ssize_t pwrite(int fd, const void* buf, size_t count, int64_t offset) {
+  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (h == INVALID_HANDLE_VALUE) {
+    errno = EBADF;
+    return -1;
+  }
+  OVERLAPPED ov{};
+  ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFF);
+  ov.OffsetHigh = static_cast<DWORD>((offset >> 32) & 0xFFFFFFFF);
+  DWORD bytesWritten = 0;
+  if (!WriteFile(h, buf, static_cast<DWORD>(count), &bytesWritten, &ov)) {
+    errno = EIO;
+    return -1;
+  }
+  return static_cast<ssize_t>(bytesWritten);
+}
+#else
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+#endif
+
 namespace sthir {
 
 namespace {
@@ -24,7 +72,7 @@ namespace {
 }  // namespace
 
 DiskManager::DiskManager(std::string db_file) : path_(std::move(db_file)) {
-  fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT, 0644);
+  fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_BINARY, 0644);
   if (fd_ < 0) ThrowErrno("cannot open", path_);
   const off_t size = ::lseek(fd_, 0, SEEK_END);
   if (size < 0) ThrowErrno("cannot stat", path_);
