@@ -154,33 +154,33 @@
 - **NULL semantics:** three-valued logic for comparisons in `Filter`; `COUNT(*)` counts rows, `COUNT(col)` skips NULLs.
 
 ### Checklist
-- [ ] Catalog persisted and loadable; `CREATE TABLE` writes an entry.
-- [ ] Tokenizer handles identifiers, numbers, strings, operators, keywords, comments.
-- [ ] Recursive-descent parser for the full locked SQL subset above.
-- [ ] AST node types defined and their parse tests written.
-- [ ] Planner converts AST → RA tree for SELECT / INSERT / UPDATE / DELETE.
-- [ ] Volcano iterator interface (`init`/`next`/`close`) defined.
-- [ ] `SeqScan` executor implemented over the buffer pool.
-- [ ] `Filter` executor with three-valued NULL logic implemented.
-- [ ] `Project` executor implemented.
-- [ ] `Aggregate` executor implemented (hash aggregation; `COUNT/SUM/MIN/MAX/AVG`).
-- [ ] `Sort` executor implemented (in-memory sort acceptable for this phase).
-- [ ] `NestedLoopJoin` executor implemented (block nested loop: outer pages streamed, inner re-scanned) — required by Phase 7C and by Novelty 1 rules R3/R4.
-- [ ] Catalog records **declared constraints** (unique column sets, CHECK ranges, FK parent info) — this is the constraint-aware optimizer's input.
-- [ ] DDL parses `PRIMARY KEY`, `UNIQUE`, `CHECK`, `FOREIGN KEY`, `NOT NULL`, `ON DELETE RESTRICT|CASCADE` and stores them (enforcement deferred to Phase 7).
-- [ ] `ANALYZE` and `SET <flag> = <value>` statements parsed and routed (statistics → Phase 4; flags → Phases 4B/5B).
-- [ ] `INSERT` / `UPDATE` / `DELETE` executors implemented against slotted pages.
-- [ ] `run "<sql>"` CLI command: parse → plan → execute → print a formatted result table.
-- [ ] Parse-error and type-error messages are human-readable (not asserts).
-- [ ] **Verify:** run each of these and confirm output correctness:
-  - [ ] `CREATE TABLE Items (ItemID INT, ItemName VARCHAR(100), RetailPrice DECIMAL)`
-  - [ ] `INSERT INTO Items VALUES (1, 'Widget', 9.99)`
-  - [ ] `SELECT ItemName FROM Items WHERE RetailPrice > 5`
-  - [ ] `SELECT COUNT(*) FROM Items`
-  - [ ] `UPDATE Items SET RetailPrice = 12.50 WHERE ItemID = 1`
-  - [ ] `DELETE FROM Items WHERE ItemID = 1`
-- [ ] **Report contribution (single report, §3 draft):** architecture diagram (storage → buffer pool → parser/planner → executors → catalog) embedded in `docs/report.md` §3, with a plain-English walkthrough of one query's journey.
-- [ ] Phase committed.
+- [x] Catalog persisted and loadable; `CREATE TABLE` writes an entry.
+- [x] Tokenizer handles identifiers, numbers, strings, operators, keywords, comments.
+- [x] Recursive-descent parser for the full locked SQL subset above.
+- [x] AST node types defined and their parse tests written.
+- [x] Planner converts AST → RA tree for SELECT / INSERT / UPDATE / DELETE.
+- [x] Volcano iterator interface (`init`/`next`/`close`) defined.
+- [x] `SeqScan` executor implemented over the buffer pool.
+- [x] `Filter` executor with three-valued NULL logic implemented.
+- [x] `Project` executor implemented.
+- [x] `Aggregate` executor implemented (hash aggregation; `COUNT/SUM/MIN/MAX/AVG`).
+- [x] `Sort` executor implemented (in-memory sort acceptable for this phase).
+- [x] `NestedLoopJoin` executor implemented (block nested loop: outer pages streamed, inner re-scanned) — required by Phase 7C and by Novelty 1 rules R3/R4.
+- [x] Catalog records **declared constraints** (unique column sets, CHECK ranges, FK parent info) — this is the constraint-aware optimizer's input.
+- [x] DDL parses `PRIMARY KEY`, `UNIQUE`, `CHECK`, `FOREIGN KEY`, `NOT NULL`, `ON DELETE RESTRICT|CASCADE` and stores them (enforcement deferred to Phase 7).
+- [x] `ANALYZE` and `SET <flag> = <value>` statements parsed and routed (statistics → Phase 4; flags → Phases 4B/5B).
+- [x] `INSERT` / `UPDATE` / `DELETE` executors implemented against slotted pages.
+- [x] `run "<sql>"` CLI command: parse → plan → execute → print a formatted result table.
+- [x] Parse-error and type-error messages are human-readable (not asserts).
+- [x] **Verify:** run each of these and confirm output correctness:
+  - [x] `CREATE TABLE Items (ItemID INT, ItemName VARCHAR(100), RetailPrice DECIMAL)`
+  - [x] `INSERT INTO Items VALUES (1, 'Widget', 9.99)`
+  - [x] `SELECT ItemName FROM Items WHERE RetailPrice > 5`
+  - [x] `SELECT COUNT(*) FROM Items`
+  - [x] `UPDATE Items SET RetailPrice = 12.50 WHERE ItemID = 1`
+  - [x] `DELETE FROM Items WHERE ItemID = 1`
+- [x] **Report contribution (single report, §3 draft):** architecture diagram (storage → buffer pool → parser/planner → executors → catalog) embedded in `docs/report.md` §3, with a plain-English walkthrough of one query's journey.
+- [x] Phase committed.
 
 ---
 

@@ -1,0 +1,22 @@
+﻿$ ./build/sthirdb run 'CREATE TABLE Items (ItemID INT, ItemName VARCHAR(100), RetailPrice DECIMAL);'
+Query OK
+$ ./build/sthirdb run 'INSERT INTO Items VALUES (1, ''Widget'', 9.99);'
+Query OK, 1 row(s) affected
+$ ./build/sthirdb run 'SELECT ItemName FROM Items WHERE RetailPrice > 5;'
++----------+
+| ItemName |
++----------+
+| Widget   |
++----------+
+(1 row(s))
+$ ./build/sthirdb run 'SELECT COUNT(*) FROM Items;'
++----------+
+| COUNT(*) |
++----------+
+| 1        |
++----------+
+(1 row(s))
+$ ./build/sthirdb run 'UPDATE Items SET RetailPrice = 12.50 WHERE ItemID = 1;'
+Query OK, 1 row(s) affected
+$ ./build/sthirdb run 'DELETE FROM Items WHERE ItemID = 1;'
+Query OK, 1 row(s) affected

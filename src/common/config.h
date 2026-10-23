@@ -17,6 +17,7 @@ inline constexpr std::size_t kDefaultPoolFrames = 64;
 
 // Runtime data locations (gitignored).
 inline constexpr const char* kDataDir = "./data/retail";
+inline constexpr const char* kCatalogPath = "./data/retail/catalog.json";
 inline constexpr const char* kItemsFilePath = "./data/retail/items.dat";
 
 // Phase 1 fixed demo row: [int32 id][char[50] name][double price][bool deleted].
