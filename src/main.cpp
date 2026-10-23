@@ -5,7 +5,9 @@
 #include <filesystem>
 #include <string>
 
+#include "catalog/catalog.h"
 #include "common/config.h"
+#include "exec/execution_engine.h"
 #include "storage/buffer_pool.h"
 #include "storage/disk_manager.h"
 #include "storage/page.h"
@@ -22,6 +24,7 @@ void PrintUsage() {
       "Usage:\n"
       "  sthirdb                     Print this help and exit (status 0).\n"
       "  sthirdb --version           Print version and exit.\n"
+      "  sthirdb run \"<sql>\"         Execute a SQL query, DDL, or DML statement.\n"
       "  sthirdb init_schema         Create ./data/retail and the Items table file.\n"
       "  sthirdb load_data --rows N  Bulk-insert N rows into Items.\n"
       "  sthirdb count               Count live rows in Items.\n",
@@ -35,6 +38,21 @@ int CmdInitSchema() {
     std::fprintf(stderr, "init_schema: cannot create directory %s: %s\n", sthir::kDataDir,
                  ec.message().c_str());
     return 1;
+  }
+
+  // Ensure catalog has Items entry
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  catalog.Load();
+  if (!catalog.HasTable("items")) {
+    sthir::TableSchema schema;
+    schema.table_name = "Items";
+    schema.data_file_path = sthir::kItemsFilePath;
+    schema.columns = {
+        {"id", sthir::DataType::INT, 4, true, true, false},
+        {"name", sthir::DataType::VARCHAR, 50, false, false, false},
+        {"price", sthir::DataType::DECIMAL, 8, false, false, false}};
+    schema.primary_key_columns = {"id"};
+    catalog.CreateTable(schema);
   }
 
   sthir::DiskManager dm(sthir::kItemsFilePath);
@@ -136,6 +154,19 @@ int CmdCount() {
   return 0;
 }
 
+int CmdRun(const std::string& sql) {
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "run: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  auto res = engine.Execute(sql);
+  res.PrintTable(std::cout);
+  return res.success ? 0 : 1;
+}
+
 bool ParseRowsArg(int argc, char** argv, size_t* out_rows) {
   if (argc != 4 || std::string(argv[2]) != "--rows") return false;
   errno = 0;
@@ -158,6 +189,13 @@ int main(int argc, char** argv) {
   if (cmd == "--version" || cmd == "-v") {
     std::printf("SthirDB %s\n", sthir::kVersion);
     return 0;
+  }
+  if (cmd == "run") {
+    if (argc != 3) {
+      std::fprintf(stderr, "run: expected 'sthirdb run \"<sql>\"'\n");
+      return 2;
+    }
+    return CmdRun(argv[2]);
   }
   if (cmd == "init_schema") {
     if (argc != 2) {

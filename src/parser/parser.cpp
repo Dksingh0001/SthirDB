@@ -349,7 +349,12 @@ std::unique_ptr<SelectStmt> Parser::ParseSelect() {
     if (!Expect(TokenType::BY, "expected 'BY' after 'GROUP'")) return nullptr;
     while (!IsAtEnd()) {
       if (!Expect(TokenType::IDENTIFIER, "expected column name in GROUP BY")) return nullptr;
-      stmt->group_by_columns.push_back(Previous().lexeme);
+      std::string col = Previous().lexeme;
+      if (Match(TokenType::DOT)) {
+        if (!Expect(TokenType::IDENTIFIER, "expected column name after '.'")) return nullptr;
+        col += "." + Previous().lexeme;
+      }
+      stmt->group_by_columns.push_back(col);
       if (!Match(TokenType::COMMA)) break;
     }
   }
@@ -360,7 +365,12 @@ std::unique_ptr<SelectStmt> Parser::ParseSelect() {
     while (!IsAtEnd()) {
       if (!Expect(TokenType::IDENTIFIER, "expected column name in ORDER BY")) return nullptr;
       OrderByItem item;
-      item.column_name = Previous().lexeme;
+      std::string col = Previous().lexeme;
+      if (Match(TokenType::DOT)) {
+        if (!Expect(TokenType::IDENTIFIER, "expected column name after '.'")) return nullptr;
+        col += "." + Previous().lexeme;
+      }
+      item.column_name = col;
       if (Match(TokenType::DESC)) {
         item.is_desc = true;
       } else {
