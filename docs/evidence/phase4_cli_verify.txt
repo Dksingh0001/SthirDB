@@ -1,0 +1,319 @@
+=== SthirDB Phase 4 — optimizer CLI verification ===
+date: 2026-10-24 10:01:24 UTC  binary: SthirDB 0.1.0
+dataset: 5000 rows, price = 1.00 + 0.01*(id-1), index idx_price on Items(price)
+cost constants: seq_page_cost=1.0, rand_page_cost=4.0 (chosen, not measured)
+
+------------------------------------------------------------------
+1. ANALYZE Items (refresh + persist statistics)
+------------------------------------------------------------------
+Query OK, 2 row(s) affected
+
+------------------------------------------------------------------
+2. Case A — IndexScan WINS (selective equality): SELECT * FROM Items WHERE price = 25.55
+------------------------------------------------------------------
+$ sthirdb explain "SELECT * FROM Items WHERE price = 25.55"
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| QUERY PLAN                                                                                                                                                                                                                |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Chosen access path: IndexScan(idx_price)+Filter
+Filter  [rows=1, cost=12]
+  IndexScan(Items using idx_price on price, keys [2554, 2556])  [rows=1, cost=12]
+Rejected alternatives:
+  SeqScan+Filter  cost=41.0  rows=1.0
+ |
++---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+(1 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE price = 25.55"
+Chosen plan (IndexScan(idx_price)+Filter):
+Filter  [rows=1, cost=12]
+  IndexScan(Items using idx_price on price, keys [2554, 2556])  [rows=1, cost=12]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 12.0                        |
+| rows_estimated          | 1                           |
+| actual_time_ms          | 0.075                       |
+| rows_actual             | 1                           |
+| rejected SeqScan+Filter | cost=41.0 rows=1            |
+| estimation_error        | 1.00x                       |
++-------------------------+-----------------------------+
+(7 row(s))
+
+actual_time_ms over 5 runs — chosen path (IndexScan) vs forced SeqScan:
+  chosen(index) | actual_time_ms | 0.045
+  chosen(index) | actual_time_ms | 0.048
+  chosen(index) | actual_time_ms | 0.063
+  chosen(index) | actual_time_ms | 0.050
+  chosen(index) | actual_time_ms | 0.043
+  forced --seq  | actual_time_ms | 1.283
+  forced --seq  | actual_time_ms | 1.296
+  forced --seq  | actual_time_ms | 1.272
+  forced --seq  | actual_time_ms | 1.318
+  forced --seq  | actual_time_ms | 1.325
+
+------------------------------------------------------------------
+3. Case B — SeqScan WINS (non-selective range): SELECT * FROM Items WHERE price > 1.5
+------------------------------------------------------------------
+$ sthirdb explain "SELECT * FROM Items WHERE price > 1.5"
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| QUERY PLAN                                                                                                                                                                              |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Chosen access path: SeqScan+Filter
+Filter  [rows=4950.0, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+Rejected alternatives:
+  IndexScan(idx_price)+Filter  cost=172.0  rows=4950.0
+ |
++-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+(1 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE price > 1.5"
+Chosen plan (SeqScan+Filter):
+Filter  [rows=4950.0, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+
++--------------------------------------+----------------------+
+| METRIC                               | VALUE                |
++--------------------------------------+----------------------+
+| chosen_path                          | SeqScan+Filter       |
+| estimated_cost                       | 41.0                 |
+| rows_estimated                       | 4950                 |
+| actual_time_ms                       | 3.749                |
+| rows_actual                          | 4949                 |
+| rejected IndexScan(idx_price)+Filter | cost=172.0 rows=4950 |
+| estimation_error                     | 1.00x                |
++--------------------------------------+----------------------+
+(7 row(s))
+
+actual_time_ms over 5 runs — chosen path (SeqScan) vs forced IndexScan:
+  chosen(seq)    | actual_time_ms | 4.001
+  chosen(seq)    | actual_time_ms | 7.693
+  chosen(seq)    | actual_time_ms | 4.408
+  chosen(seq)    | actual_time_ms | 3.735
+  chosen(seq)    | actual_time_ms | 6.144
+  forced --index | actual_time_ms | 9.332
+  forced --index | actual_time_ms | 10.755
+  forced --index | actual_time_ms | 8.672
+  forced --index | actual_time_ms | 8.547
+  forced --index | actual_time_ms | 10.679
+
+------------------------------------------------------------------
+4. Selectivity sweep — does the chosen path match the faster observed runtime?
+------------------------------------------------------------------
+predicate            rows_actual  chosen_path       seq_ms   index_ms  choice_matches_faster
+price > 44                699  IndexScan          1.931     1.251  yes
+price > 42                899  IndexScan          2.104     1.536  yes
+price > 40               1099  SeqScan            2.317     2.160  NO (seq chosen, index faster)
+price > 38               1299  SeqScan            2.630     2.639  yes
+price > 35               1599  SeqScan            2.084     2.855  yes
+price > 30               2099  SeqScan            3.146     4.192  yes
+price > 25               2599  SeqScan            2.997     5.987  yes
+price > 20               3099  SeqScan            3.164     5.772  yes
+(Each seq_ms/index_ms is one run of optimizer --seq / --index on an otherwise idle
+ machine; run-to-run noise is roughly +/-0.5 ms, so borderline rows are ties.)
+
+------------------------------------------------------------------
+5. Bad estimate (honest limitation): correlated conjunction id > 4900 AND price > 49
+------------------------------------------------------------------
+$ sthirdb optimizer "SELECT * FROM Items WHERE id > 4900 AND price > 49"
+Chosen plan (IndexScan(idx_price)+Filter):
+Filter  [rows=4, cost=12]
+  IndexScan(Items using idx_price on price, keys [4900, +inf))  [rows=4, cost=12]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 12.0                        |
+| rows_estimated          | 4                           |
+| actual_time_ms          | 0.451                       |
+| rows_actual             | 100                         |
+| rejected SeqScan+Filter | cost=41.0 rows=4            |
+| estimation_error        | 25.00x                      |
++-------------------------+-----------------------------+
+(7 row(s))
+
+truth: id and price are deterministically related (price = 1 + 0.01*(id-1)),
+so multiplying the two selectivities under the independence assumption
+multiplies probabilities that are not independent: est 4 rows, actual 100.
+
+------------------------------------------------------------------
+6. Estimated vs actual across query shapes
+------------------------------------------------------------------
+$ sthirdb optimizer "SELECT * FROM Items WHERE price = 25.55"
+Chosen plan (IndexScan(idx_price)+Filter):
+Filter  [rows=1, cost=12]
+  IndexScan(Items using idx_price on price, keys [2554, 2556])  [rows=1, cost=12]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 12.0                        |
+| rows_estimated          | 1                           |
+| actual_time_ms          | 0.052                       |
+| rows_actual             | 1                           |
+| rejected SeqScan+Filter | cost=41.0 rows=1            |
+| estimation_error        | 1.00x                       |
++-------------------------+-----------------------------+
+(7 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE price > 40 AND price < 41"
+Chosen plan (IndexScan(idx_price)+Filter):
+Filter  [rows=880, cost=40]
+  IndexScan(Items using idx_price on price, keys [4000, 4100])  [rows=880, cost=40]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 40.0                        |
+| rows_estimated          | 880                         |
+| actual_time_ms          | 0.242                       |
+| rows_actual             | 99                          |
+| rejected SeqScan+Filter | cost=41.0 rows=880          |
+| estimation_error        | 0.11x                       |
++-------------------------+-----------------------------+
+(7 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE price < 2 OR price > 50"
+Chosen plan (SeqScan+Filter):
+Filter  [rows=197.1, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+
++------------------+----------------+
+| METRIC           | VALUE          |
++------------------+----------------+
+| chosen_path      | SeqScan+Filter |
+| estimated_cost   | 41.0           |
+| rows_estimated   | 197            |
+| actual_time_ms   | 4.421          |
+| rows_actual      | 199            |
+| estimation_error | 1.01x          |
++------------------+----------------+
+(6 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE id > 4900 AND price > 49"
+Chosen plan (IndexScan(idx_price)+Filter):
+Filter  [rows=4, cost=12]
+  IndexScan(Items using idx_price on price, keys [4900, +inf))  [rows=4, cost=12]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 12.0                        |
+| rows_estimated          | 4                           |
+| actual_time_ms          | 0.373                       |
+| rows_actual             | 100                         |
+| rejected SeqScan+Filter | cost=41.0 rows=4            |
+| estimation_error        | 25.00x                      |
++-------------------------+-----------------------------+
+(7 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items WHERE price > 1.5"
+Chosen plan (SeqScan+Filter):
+Filter  [rows=4950.0, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+
++--------------------------------------+----------------------+
+| METRIC                               | VALUE                |
++--------------------------------------+----------------------+
+| chosen_path                          | SeqScan+Filter       |
+| estimated_cost                       | 41.0                 |
+| rows_estimated                       | 4950                 |
+| actual_time_ms                       | 3.928                |
+| rows_actual                          | 4949                 |
+| rejected IndexScan(idx_price)+Filter | cost=172.0 rows=4950 |
+| estimation_error                     | 1.00x                |
++--------------------------------------+----------------------+
+(7 row(s))
+
+$ sthirdb optimizer "SELECT COUNT(*) FROM Items WHERE price > 49"
+Chosen plan (IndexScan(idx_price)+Filter):
+Project(COUNT(*))  [rows=1, cost=16]
+  Aggregate(group_by=[])  [rows=1, cost=16]
+    Filter  [rows=199, cost=16]
+      IndexScan(Items using idx_price on price, keys [4900, +inf))  [rows=199, cost=16]
+
++-------------------------+-----------------------------+
+| METRIC                  | VALUE                       |
++-------------------------+-----------------------------+
+| chosen_path             | IndexScan(idx_price)+Filter |
+| estimated_cost          | 16.0                        |
+| rows_estimated          | 1                           |
+| actual_time_ms          | 0.301                       |
+| rows_actual             | 1                           |
+| rejected SeqScan+Filter | cost=41.0 rows=199          |
+| estimation_error        | 1.00x                       |
++-------------------------+-----------------------------+
+(7 row(s))
+
+
+------------------------------------------------------------------
+7. Cost model on Sort / Aggregate plans
+------------------------------------------------------------------
+$ sthirdb optimizer "SELECT AVG(price) FROM Items"
+Chosen plan (SeqScan):
+Project(AVG(price))  [rows=1, cost=41]
+  Aggregate(group_by=[])  [rows=1, cost=41]
+    SeqScan(Items)  [rows=5000, cost=41]
+
++------------------+---------+
+| METRIC           | VALUE   |
++------------------+---------+
+| chosen_path      | SeqScan |
+| estimated_cost   | 41.0    |
+| rows_estimated   | 1       |
+| actual_time_ms   | 1.264   |
+| rows_actual      | 1       |
+| estimation_error | 1.00x   |
++------------------+---------+
+(6 row(s))
+
+$ sthirdb optimizer "SELECT * FROM Items ORDER BY price DESC"
+Chosen plan (SeqScan):
+Sort(price DESC)  [rows=5000, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+
++------------------+---------+
+| METRIC           | VALUE   |
++------------------+---------+
+| chosen_path      | SeqScan |
+| estimated_cost   | 41.0    |
+| rows_estimated   | 5000    |
+| actual_time_ms   | 9.273   |
+| rows_actual      | 5000    |
+| estimation_error | 1.00x   |
++------------------+---------+
+(6 row(s))
+
+
+------------------------------------------------------------------
+8. constraint_aware hook (Phase 4B placeholder: no rules implemented yet)
+------------------------------------------------------------------
+The CLI runs one statement per session, so the flag cannot be flipped and then
+observed across two invocations; the hook is exercised through the engine API in
+test_optimizer.cpp. Behavior:
+  constraint_aware = off (default): EXPLAIN/optimizer output has no rules line.
+  constraint_aware = on:            EXPLAIN and optimizer output append:
+      Applied rules: (none - constraint-aware rules arrive in Phase 4B)
+
+$ sthirdb run "SET constraint_aware = on; EXPLAIN ..."   # only the first
+# statement executes: the CLI is one statement per invocation:
+Query OK
+
+$ ./build/test_optimizer   # covers flag on -> line present, off -> absent:
+PASS engine_reports_estimate_and_actual
+all optimizer tests passed
+
+------------------------------------------------------------------
+9. Join-order enumeration (stretch): 6 permutations for a 3-table join
+------------------------------------------------------------------
+src/optimizer/join_order.cpp:27:std::vector<JoinOrderPlan> EnumerateJoinOrders(const std::vector<JoinTableSummary>& tables) {
+src/optimizer/join_order.cpp:39:  } while (std::next_permutation(perm.begin(), perm.end()));
+src/optimizer/join_order.h:28:std::vector<JoinOrderPlan> EnumerateJoinOrders(const std::vector<JoinTableSummary>& tables);
+$ build/test_optimizer — test_join_order_enumeration asserts all 6 orders (see phase4_tests.txt)
