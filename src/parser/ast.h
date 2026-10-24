@@ -183,6 +183,7 @@ class AggregateExpr : public Expr {
 
 enum class StmtType {
   CREATE_TABLE,
+  CREATE_INDEX,
   INSERT,
   SELECT,
   UPDATE,
@@ -209,6 +210,16 @@ class CreateTableStmt : public SQLStatement {
   std::vector<std::vector<std::string>> unique_constraints;
   std::vector<ForeignKey> foreign_keys;
   std::vector<CheckConstraint> check_constraints;
+};
+
+// CREATE INDEX <index_name> ON <table> (<column>)
+class CreateIndexStmt : public SQLStatement {
+ public:
+  StmtType type() const override { return StmtType::CREATE_INDEX; }
+
+  std::string index_name;
+  std::string table_name;
+  std::string column_name;
 };
 
 class InsertStmt : public SQLStatement {

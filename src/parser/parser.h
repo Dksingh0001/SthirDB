@@ -28,6 +28,7 @@ class Parser {
 
   // Statement parsers
   std::unique_ptr<CreateTableStmt> ParseCreateTable();
+  std::unique_ptr<CreateIndexStmt> ParseCreateIndex();
   std::unique_ptr<InsertStmt> ParseInsert();
   std::unique_ptr<SelectStmt> ParseSelect();
   std::unique_ptr<UpdateStmt> ParseUpdate();

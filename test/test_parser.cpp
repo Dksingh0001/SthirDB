@@ -206,6 +206,30 @@ void test_parse_precedence_and_parentheses() {
   test_passed("parse_precedence_and_parentheses");
 }
 
+void test_parse_create_index() {
+  std::string err;
+  auto stmt = ParseSQL("CREATE INDEX idx_price ON Items (RetailPrice)", &err);
+  CHECK(stmt != nullptr);
+  CHECK_EQ(static_cast<int>(stmt->type()), static_cast<int>(sthir::StmtType::CREATE_INDEX));
+
+  auto* ci = dynamic_cast<sthir::CreateIndexStmt*>(stmt.get());
+  CHECK(ci != nullptr);
+  CHECK_EQ(ci->index_name, "idx_price");
+  CHECK_EQ(ci->table_name, "Items");
+  CHECK_EQ(ci->column_name, "RetailPrice");
+
+  // Missing pieces are reported, not silently accepted.
+  err.clear();
+  CHECK(ParseSQL("CREATE INDEX idx_price Items (RetailPrice)", &err) == nullptr);
+  CHECK(!err.empty());
+
+  err.clear();
+  CHECK(ParseSQL("CREATE INDEX idx_price ON Items RetailPrice", &err) == nullptr);
+  CHECK(!err.empty());
+
+  test_passed("parse_create_index");
+}
+
 void test_parse_errors() {
   std::string err;
   CHECK(ParseSQL("CREATE TABLE ;", &err) == nullptr);
@@ -227,6 +251,7 @@ void test_parse_errors() {
 int main() {
   test_parse_create_table();
   test_parse_create_table_with_constraints();
+  test_parse_create_index();
   test_parse_insert();
   test_parse_select();
   test_parse_select_aggregates_group_order_join();

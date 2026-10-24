@@ -54,6 +54,7 @@ std::string TokenTypeToString(TokenType type) {
     case TokenType::CHECK: return "CHECK";
     case TokenType::FOREIGN: return "FOREIGN";
     case TokenType::REFERENCES: return "REFERENCES";
+    case TokenType::INDEX: return "INDEX";
     case TokenType::RESTRICT: return "RESTRICT";
     case TokenType::CASCADE: return "CASCADE";
     case TokenType::LPAREN: return "(";
@@ -127,6 +128,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"check", TokenType::CHECK},
     {"foreign", TokenType::FOREIGN},
     {"references", TokenType::REFERENCES},
+    {"index", TokenType::INDEX},
     {"restrict", TokenType::RESTRICT},
     {"cascade", TokenType::CASCADE},
 };

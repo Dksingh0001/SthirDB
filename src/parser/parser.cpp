@@ -66,7 +66,10 @@ std::unique_ptr<SQLStatement> Parser::ParseStatement() {
     return nullptr;
   }
 
-  if (Match(TokenType::CREATE)) return ParseCreateTable();
+  if (Match(TokenType::CREATE)) {
+    if (Check(TokenType::INDEX)) return ParseCreateIndex();
+    return ParseCreateTable();
+  }
   if (Match(TokenType::INSERT)) return ParseInsert();
   if (Match(TokenType::SELECT)) return ParseSelect();
   if (Match(TokenType::UPDATE)) return ParseUpdate();
@@ -81,6 +84,24 @@ std::unique_ptr<SQLStatement> Parser::ParseStatement() {
 
   SetError("unrecognized statement", Peek());
   return nullptr;
+}
+
+std::unique_ptr<CreateIndexStmt> Parser::ParseCreateIndex() {
+  if (!Expect(TokenType::INDEX, "expected 'INDEX' after 'CREATE'")) return nullptr;
+  if (!Expect(TokenType::IDENTIFIER, "expected index name")) return nullptr;
+  auto stmt = std::make_unique<CreateIndexStmt>();
+  stmt->index_name = Previous().lexeme;
+
+  if (!Expect(TokenType::ON, "expected 'ON' after index name")) return nullptr;
+  if (!Expect(TokenType::IDENTIFIER, "expected table name after 'ON'")) return nullptr;
+  stmt->table_name = Previous().lexeme;
+
+  if (!Expect(TokenType::LPAREN, "expected '(' after table name")) return nullptr;
+  if (!Expect(TokenType::IDENTIFIER, "expected column name in index")) return nullptr;
+  stmt->column_name = Previous().lexeme;
+  if (!Expect(TokenType::RPAREN, "expected ')' after indexed column")) return nullptr;
+
+  return stmt;
 }
 
 std::unique_ptr<CreateTableStmt> Parser::ParseCreateTable() {
