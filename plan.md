@@ -212,7 +212,7 @@
 - [x] Unit test: duplicate keys return all matching RIDs.
 - [x] **Verify:** with an index on `RetailPrice`, `SELECT * FROM Items WHERE RetailPrice > 50` returns the same rows as the SeqScan+Filter path.
 - [x] **Report contribution (single report, §4 continued):** B+tree node-format figure + the 10,000-key ascending/random/duplicate test results written into `docs/report.md` §4; evidence in `docs/evidence/`.
-- [ ] Phase committed.
+- [x] Phase committed.
 
 ---
 
