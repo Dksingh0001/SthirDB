@@ -46,6 +46,7 @@ std::string TokenTypeToString(TokenType type) {
     case TokenType::ABORT: return "ABORT";
     case TokenType::ROLLBACK: return "ROLLBACK";
     case TokenType::TRANSACTION: return "TRANSACTION";
+    case TokenType::CHECKPOINT: return "CHECKPOINT";
     case TokenType::ANALYZE: return "ANALYZE";
     case TokenType::EXPLAIN: return "EXPLAIN";
     case TokenType::PRIMARY: return "PRIMARY";
@@ -120,6 +121,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"abort", TokenType::ABORT},
     {"rollback", TokenType::ROLLBACK},
     {"transaction", TokenType::TRANSACTION},
+    {"checkpoint", TokenType::CHECKPOINT},
     {"analyze", TokenType::ANALYZE},
     {"explain", TokenType::EXPLAIN},
     {"primary", TokenType::PRIMARY},

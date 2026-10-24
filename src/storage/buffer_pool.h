@@ -49,11 +49,15 @@ class BufferPool {
   std::size_t pool_size() const { return frames_.size(); }
   std::size_t evictable_frames() const;
 
+  void set_wal_manager(class WalManager* wal) { wal_ = wal; }
+  class WalManager* wal_manager() const { return wal_; }
+
  private:
   std::optional<int> take_frame();  // free list first, then LRU eviction
 
   mutable std::mutex latch_;
   DiskManager* dm_;
+  class WalManager* wal_ = nullptr;
   std::vector<Page> frames_;
   std::vector<int> pin_count_;
   std::vector<bool> dirty_;

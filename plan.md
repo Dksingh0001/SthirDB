@@ -356,38 +356,38 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 - **Tunable knobs:** `SET checkpoint_interval = <n | none>` (consumed by Phase 5B Part B). Keep the commit policy explicit (`force log at commit`) so the experiment's fixed variable is genuinely fixed.
 
 ### Checklist
-- [ ] WAL file (`./data/retail/wal.log`) with append + fsync implemented.
-- [ ] Log record struct + serialize/deserialize implemented and unit tested for every record type.
-- [ ] LSN allocator (monotonic) implemented.
-- [ ] `page_lsn` reserved in page headers in Phase 1 is now written on every page modification.
-- [ ] Log-before-data rule enforced in the write path (a test must prove a page cannot be flushed with a `page_lsn` ahead of the flushed log).
-- [ ] Transaction manager: `BEGIN` / `COMMIT` / `ABORT` create/close log records; commit fsyncs the log tail.
-- [ ] In-memory Transaction Table + Dirty Page Table structures implemented.
-- [ ] Checkpoint routine implemented (flush dirty pages → write CHECKPOINT record with table snapshot).
-- [ ] **Analysis pass** implemented (rebuild both tables; compute RedoLSN); logs its reconstructed tables for demo output.
-- [ ] **Redo pass** implemented with the `page_lsn >= log_lsn` skip rule; iterates from RedoLSN.
-- [ ] **Undo pass** implemented walking backward over losers in LSN order.
-- [ ] **CLR writing** implemented with correct `undo_nxt_lsn` chaining.
-- [ ] Crash-during-undo safety handled (a re-crash re-runs Analysis+Redo, replays CLRs, resumes undo from the last CLR).
-- [ ] `recover` command path: on startup, if a WAL exists, run Analysis → Redo → Undo before accepting new work.
-- [ ] `crash_point(name)` hooks placed at all seven hazard locations (log-before-page, page-before-commit, commit-before-flush, mid-page-flush, mid-checkpoint, during-undo, during-recovery).
-- [ ] Crash hooks are no-ops outside the test flag (verified: a normal run never crashes).
-- [ ] `SET checkpoint_interval = <n | none>` knob implemented (consumed by Phase 5B Part B).
-- [ ] Recovery progress is printed (pass, current LSN, txn, page) so the demo is visible.
-- [ ] Recovery timer: print total recovery time and the WAL size at crash.
+- [x] WAL file (`./data/retail/wal.log`) with append + fsync implemented.
+- [x] Log record struct + serialize/deserialize implemented and unit tested for every record type.
+- [x] LSN allocator (monotonic) implemented.
+- [x] `page_lsn` reserved in page headers in Phase 1 is now written on every page modification.
+- [x] Log-before-data rule enforced in the write path (a test must prove a page cannot be flushed with a `page_lsn` ahead of the flushed log).
+- [x] Transaction manager: `BEGIN` / `COMMIT` / `ABORT` create/close log records; commit fsyncs the log tail.
+- [x] In-memory Transaction Table + Dirty Page Table structures implemented.
+- [x] Checkpoint routine implemented (flush dirty pages → write CHECKPOINT record with table snapshot).
+- [x] **Analysis pass** implemented (rebuild both tables; compute RedoLSN); logs its reconstructed tables for demo output.
+- [x] **Redo pass** implemented with the `page_lsn >= log_lsn` skip rule; iterates from RedoLSN.
+- [x] **Undo pass** implemented walking backward over losers in LSN order.
+- [x] **CLR writing** implemented with correct `undo_nxt_lsn` chaining.
+- [x] Crash-during-undo safety handled (a re-crash re-runs Analysis+Redo, replays CLRs, resumes undo from the last CLR).
+- [x] `recover` command path: on startup, if a WAL exists, run Analysis → Redo → Undo before accepting new work.
+- [x] `crash_point(name)` hooks placed at all seven hazard locations (log-before-page, page-before-commit, commit-before-flush, mid-page-flush, mid-checkpoint, during-undo, during-recovery).
+- [x] Crash hooks are no-ops outside the test flag (verified: a normal run never crashes).
+- [x] `SET checkpoint_interval = <n | none>` knob implemented (consumed by Phase 5B Part B).
+- [x] Recovery progress is printed (pass, current LSN, txn, page) so the demo is visible.
+- [x] Recovery timer: print total recovery time and the WAL size at crash.
 
 ### Verification experiments (these produce the report's Experiment 1)
-- [ ] **Test A (committed survives):** begin txn, insert row, commit, SIGKILL the process, restart → row present.
-- [ ] **Test B (uncommitted vanishes):** begin txn, insert row, SIGKILL *before* commit, restart → row absent.
-- [ ] **Test C (partial transaction rolled back):** multi-statement txn, kill mid-way, restart → all statements' effects absent.
-- [ ] **Test D (steal + no-force):** force dirty uncommitted pages to disk before the crash, then verify undo still removes their effects.
-- [ ] **Test E (checkpoint bounds work):** with checkpoints every N records, verify Analysis scans only from the last checkpoint.
-- [ ] **Test F (crash during undo):** SIGKILL during the Undo pass, restart again, verify the database still reaches the correct final state (CLR idempotency).
-- [ ] **Test G (recovery time vs. log size):** measure recovery time for WAL sizes spanning one decade (e.g., ~1 MB vs ~10 MB); record the numbers.
-- [ ] **Test H:** `page_lsn` monotonicity check — assert no page's `page_lsn` exceeds the last flushed log LSN.
-- [ ] **Verify:** all eight tests pass reproducibly from a shell script in `scripts/recovery_demo.sh`.
-- [ ] **Report contribution (single report, §7):** log format, per-page LSN, Analysis/Redo/Undo pseudo-code, steal/no-force explanation, and the Tests A–H results table written into `docs/report.md` §7 (every term defined in plain English at first use); evidence in `docs/evidence/`.
-- [ ] Phase committed; this is the checkpoint for the report's core chapter.
+- [x] **Test A (committed survives):** begin txn, insert row, commit, SIGKILL the process, restart → row present.
+- [x] **Test B (uncommitted vanishes):** begin txn, insert row, SIGKILL *before* commit, restart → row absent.
+- [x] **Test C (partial transaction rolled back):** multi-statement txn, kill mid-way, restart → all statements' effects absent.
+- [x] **Test D (steal + no-force):** force dirty uncommitted pages to disk before the crash, then verify undo still removes their effects.
+- [x] **Test E (checkpoint bounds work):** with checkpoints every N records, verify Analysis scans only from the last checkpoint.
+- [x] **Test F (crash during undo):** SIGKILL during the Undo pass, restart again, verify the database still reaches the correct final state (CLR idempotency).
+- [x] **Test G (recovery time vs. log size):** measure recovery time for WAL sizes spanning one decade (e.g., ~1 MB vs ~10 MB); record the numbers.
+- [x] **Test H:** `page_lsn` monotonicity check — assert no page's `page_lsn` exceeds the last flushed log LSN.
+- [x] **Verify:** all eight tests pass reproducibly from a shell script in `scripts/recovery_demo.sh`.
+- [x] **Report contribution (single report, §7):** log format, per-page LSN, Analysis/Redo/Undo pseudo-code, steal/no-force explanation, and the Tests A–H results table written into `docs/report.md` §7 (every term defined in plain English at first use); evidence in `docs/evidence/`.
+- [x] Phase committed; this is the checkpoint for the report's core chapter.
 
 ---
 

@@ -12,6 +12,7 @@
 #include "planner/plan_node.h"
 #include "storage/buffer_pool.h"
 #include "storage/disk_manager.h"
+#include "recovery/recovery_manager.h"
 
 namespace sthir {
 
@@ -49,6 +50,10 @@ class ExecutionEngine {
   void SetSessionFlag(const std::string& key, const std::string& val);
   std::string GetSessionFlag(const std::string& key) const;
 
+  RecoveryReport Recover();
+  class WalManager* wal_manager() const { return wal_.get(); }
+  class RecoveryManager* recovery_manager() const { return recovery_.get(); }
+
  private:
   struct StorageContext {
     std::unique_ptr<DiskManager> dm;
@@ -64,6 +69,10 @@ class ExecutionEngine {
   std::string data_dir_;
   std::unordered_map<std::string, std::unique_ptr<StorageContext>> storage_map_;
   std::unordered_map<std::string, std::string> session_flags_;
+
+  std::unique_ptr<class WalManager> wal_;
+  std::unique_ptr<class RecoveryManager> recovery_;
+  uint32_t current_txn_id_ = 0;
 };
 
 }  // namespace sthir

@@ -188,11 +188,17 @@ class NestedLoopJoinExecutor : public Executor {
   bool right_buffered_ = false;
 };
 
+// Forward declaration
+class RecoveryManager;
+
 // DML execution functions that directly mutate slotted-page storage
-size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err);
+size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err,
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
 size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
-                     BufferPool* bp, DiskManager* dm, std::string* err);
+                     BufferPool* bp, DiskManager* dm, std::string* err,
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
 size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
-                     BufferPool* bp, DiskManager* dm, std::string* err);
+                     BufferPool* bp, DiskManager* dm, std::string* err,
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
 
 }  // namespace sthir

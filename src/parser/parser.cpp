@@ -75,7 +75,8 @@ std::unique_ptr<SQLStatement> Parser::ParseStatement() {
   if (Match(TokenType::UPDATE)) return ParseUpdate();
   if (Match(TokenType::DELETE)) return ParseDelete();
   if (Check(TokenType::BEGIN_KW) || Check(TokenType::COMMIT) ||
-      Check(TokenType::ABORT) || Check(TokenType::ROLLBACK)) {
+      Check(TokenType::ABORT) || Check(TokenType::ROLLBACK) ||
+      Check(TokenType::CHECKPOINT)) {
     return ParseTransaction();
   }
   if (Match(TokenType::ANALYZE)) return ParseAnalyze();
@@ -453,6 +454,7 @@ std::unique_ptr<TransactionStmt> Parser::ParseTransaction() {
   if (Match(TokenType::BEGIN_KW)) act = TransactionStmt::Action::BEGIN;
   else if (Match(TokenType::COMMIT)) act = TransactionStmt::Action::COMMIT;
   else if (Match(TokenType::ABORT) || Match(TokenType::ROLLBACK)) act = TransactionStmt::Action::ROLLBACK;
+  else if (Match(TokenType::CHECKPOINT)) act = TransactionStmt::Action::CHECKPOINT;
   else {
     SetError("expected transaction statement", Peek());
     return nullptr;
