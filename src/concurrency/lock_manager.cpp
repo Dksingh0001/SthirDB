@@ -1,13 +1,16 @@
 #include "concurrency/lock_manager.h"
+#include "lock_manager.h"
 
 #include <algorithm>
 
 namespace sthir {
 
-const char* LockModeToString(LockMode mode) {
+const char *LockModeToString(LockMode mode) {
   switch (mode) {
-    case LockMode::SHARED: return "SHARED";
-    case LockMode::EXCLUSIVE: return "EXCLUSIVE";
+  case LockMode::SHARED:
+    return "SHARED";
+  case LockMode::EXCLUSIVE:
+    return "EXCLUSIVE";
   }
   return "UNKNOWN";
 }
@@ -20,33 +23,44 @@ LockManager::~LockManager() {
   txn_locks_.clear();
 }
 
-bool LockManager::AcquireShared(uint32_t txn_id, const std::string& table_name, const RID& rid) {
-  if (txn_id == 0 || !rid.is_valid) return true;
+bool LockManager::AcquireShared(uint32_t txn_id, const std::string &table_name,
+                                const RID &rid) {
+  if (txn_id == 0 || !rid.is_valid)
+    return true;
   LockKey key{table_name, rid.page_id, rid.slot_id};
   return AcquireInternal(txn_id, key, LockMode::SHARED);
 }
 
-bool LockManager::AcquireExclusive(uint32_t txn_id, const std::string& table_name, const RID& rid) {
-  if (txn_id == 0 || !rid.is_valid) return true;
+bool LockManager::AcquireExclusive(uint32_t txn_id,
+                                   const std::string &table_name,
+                                   const RID &rid) {
+  if (txn_id == 0 || !rid.is_valid)
+    return true;
   LockKey key{table_name, rid.page_id, rid.slot_id};
   return AcquireInternal(txn_id, key, LockMode::EXCLUSIVE);
 }
 
-bool LockManager::AcquireExclusiveBatch(uint32_t txn_id, const std::string& table_name,
-                                       std::vector<RID> rids) {
-  if (txn_id == 0 || rids.empty()) return true;
+bool LockManager::AcquireExclusiveBatch(uint32_t txn_id,
+                                        const std::string &table_name,
+                                        std::vector<RID> rids) {
+  if (txn_id == 0 || rids.empty())
+    return true;
 
   // Global Lock Ordering: sort keys ascending by (page_id, slot_id)
-  std::sort(rids.begin(), rids.end(), [](const RID& a, const RID& b) {
-    if (a.page_id != b.page_id) return a.page_id < b.page_id;
+  std::sort(rids.begin(), rids.end(), [](const RID &a, const RID &b) {
+    if (a.page_id != b.page_id)
+      return a.page_id < b.page_id;
     return a.slot_id < b.slot_id;
   });
-  rids.erase(std::unique(rids.begin(), rids.end(), [](const RID& a, const RID& b) {
-    return a.page_id == b.page_id && a.slot_id == b.slot_id;
-  }), rids.end());
+  rids.erase(std::unique(rids.begin(), rids.end(),
+                         [](const RID &a, const RID &b) {
+                           return a.page_id == b.page_id &&
+                                  a.slot_id == b.slot_id;
+                         }),
+             rids.end());
 
   // Acquire sequentially according to the global order
-  for (const auto& rid : rids) {
+  for (const auto &rid : rids) {
     if (!AcquireExclusive(txn_id, table_name, rid)) {
       return false;
     }
@@ -54,7 +68,8 @@ bool LockManager::AcquireExclusiveBatch(uint32_t txn_id, const std::string& tabl
   return true;
 }
 
-bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey& key, LockMode mode) {
+bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey &key,
+                                  LockMode mode) {
   std::shared_ptr<LockHead> head;
   {
     std::lock_guard<std::mutex> g_lock(global_latch_);
@@ -72,10 +87,10 @@ bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey& key, LockMode 
   // Check if this transaction already holds the lock
   if (head->granted_txns.count(txn_id)) {
     if (head->current_mode == LockMode::EXCLUSIVE) {
-      return true;  // Already holds exclusive
+      return true; // Already holds exclusive
     }
     if (mode == LockMode::SHARED) {
-      return true;  // Already holds shared
+      return true; // Already holds shared
     }
     // Upgrade from SHARED to EXCLUSIVE
     if (head->granted_txns.size() == 1) {
@@ -85,12 +100,14 @@ bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey& key, LockMode 
     // Cannot immediately upgrade if other shared holders exist
   }
 
-  // Check if we can grant immediately without waiting (FIFO check: wait queue must be empty)
+  // Check if we can grant immediately without waiting (FIFO check: wait queue
+  // must be empty)
   bool can_grant_immediately = false;
   if (head->wait_queue.empty()) {
     if (head->granted_txns.empty()) {
       can_grant_immediately = true;
-    } else if (mode == LockMode::SHARED && head->current_mode == LockMode::SHARED) {
+    } else if (mode == LockMode::SHARED &&
+               head->current_mode == LockMode::SHARED) {
       can_grant_immediately = true;
     }
   }
@@ -113,12 +130,13 @@ bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey& key, LockMode 
   head->wait_queue.push_back(req);
 
   // Wait with timeout for deadlock avoidance
-  bool acquired = head->cv.wait_for(
-      lk, std::chrono::milliseconds(timeout_ms_), [&] { return req->granted; });
+  bool acquired = head->cv.wait_for(lk, std::chrono::milliseconds(timeout_ms_),
+                                    [&] { return req->granted; });
 
   if (!acquired) {
     // Timed out: remove from wait queue
-    auto w_it = std::find(head->wait_queue.begin(), head->wait_queue.end(), req);
+    auto w_it =
+        std::find(head->wait_queue.begin(), head->wait_queue.end(), req);
     if (w_it != head->wait_queue.end()) {
       head->wait_queue.erase(w_it);
     }
@@ -133,13 +151,15 @@ bool LockManager::AcquireInternal(uint32_t txn_id, const LockKey& key, LockMode 
   return true;
 }
 
-bool LockManager::Release(uint32_t txn_id, const std::string& table_name, const RID& rid) {
+bool LockManager::Release(uint32_t txn_id, const std::string &table_name,
+                          const RID &rid) {
   LockKey key{table_name, rid.page_id, rid.slot_id};
   std::shared_ptr<LockHead> head;
   {
     std::lock_guard<std::mutex> g_lock(global_latch_);
     auto it = lock_table_.find(key);
-    if (it == lock_table_.end()) return false;
+    if (it == lock_table_.end())
+      return false;
     head = it->second;
     txn_locks_[txn_id].erase(key);
   }
@@ -183,18 +203,20 @@ bool LockManager::Release(uint32_t txn_id, const std::string& table_name, const 
 }
 
 void LockManager::ReleaseAll(uint32_t txn_id) {
-  if (txn_id == 0) return;
+  if (txn_id == 0)
+    return;
 
   std::unordered_set<LockKey, LockKeyHash> keys_to_release;
   {
     std::lock_guard<std::mutex> g_lock(global_latch_);
     auto it = txn_locks_.find(txn_id);
-    if (it == txn_locks_.end()) return;
+    if (it == txn_locks_.end())
+      return;
     keys_to_release = it->second;
     txn_locks_.erase(it);
   }
 
-  for (const auto& key : keys_to_release) {
+  for (const auto &key : keys_to_release) {
     std::shared_ptr<LockHead> head;
     {
       std::lock_guard<std::mutex> g_lock(global_latch_);
@@ -239,12 +261,13 @@ void LockManager::ReleaseAll(uint32_t txn_id) {
   }
 }
 
-bool LockManager::HoldsExclusive(uint32_t txn_id, const std::string& table_name,
-                                 const RID& rid) const {
+bool LockManager::HoldsExclusive(uint32_t txn_id, const std::string &table_name,
+                                 const RID &rid) const {
   LockKey key{table_name, rid.page_id, rid.slot_id};
   std::lock_guard<std::mutex> g_lock(global_latch_);
   auto it = lock_table_.find(key);
-  if (it == lock_table_.end()) return false;
+  if (it == lock_table_.end())
+    return false;
   std::lock_guard<std::mutex> lk(it->second->latch);
   return it->second->current_mode == LockMode::EXCLUSIVE &&
          it->second->granted_txns.count(txn_id) > 0;
@@ -253,11 +276,11 @@ bool LockManager::HoldsExclusive(uint32_t txn_id, const std::string& table_name,
 size_t LockManager::TotalLocksHeld() const {
   std::lock_guard<std::mutex> g_lock(global_latch_);
   size_t total = 0;
-  for (const auto& [k, head] : lock_table_) {
+  for (const auto &[k, head] : lock_table_) {
     std::lock_guard<std::mutex> lk(head->latch);
     total += head->granted_txns.size();
   }
   return total;
 }
 
-}  // namespace sthir
+} // namespace sthir
