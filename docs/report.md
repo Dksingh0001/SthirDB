@@ -289,9 +289,138 @@ The tree was exercised with the three required workloads. Table 2 reports what t
 
 ## 5. Optimizer
 
-_Drafted in Phase 4._
+Phase 4 replaces Phase 3's static rule ("use an existing index when the WHERE clause yields key bounds") with a real, if small, optimizer. For a single-table SELECT it enumerates exactly two access paths — `SeqScan → Filter` and, when an index exists on a column referenced by an equality/range predicate, `IndexScan → Filter` — estimates the cardinality of each candidate from persisted table statistics, prices it with a page-based cost model, and picks the cheaper path. The choice is explainable: `EXPLAIN "<sql>"` prints the chosen plan as an indented tree with predicted rows and cost per node plus every rejected alternative with its cost, `optimizer "<sql>"` executes the query and adds `estimated_cost`, `actual_time_ms`, `rows_estimated` vs `rows_actual` and an `estimation_error` ratio, and `ANALYZE <table>` refreshes and persists the statistics. Raw transcripts: `docs/evidence/phase4_cli_verify.txt` and `docs/evidence/phase4_tests.txt`.
 
-Cost equations, cardinality rules and assumptions, plan enumeration, estimated vs. actual results. Placeholder.
+**LEON is context, not implementation.** LEON (Chen et al., PVLDB 2023, DOI 10.14778/3598581.3598597) is cited here only to frame where optimizer research is heading — learning-based, ML-aided plan and cardinality choice. **Nothing in this phase learns anything**: no model is trained, no parameter is fitted from data. The estimator is the classical NDV + histogram machinery below, and every number in this section comes from it. We say this explicitly so no evaluator goes looking for a learned component that was never promised.
+
+### 5.1 Statistics and cardinality estimation
+
+`ANALYZE <table>` scans the table exactly like `SeqScan` (one page pinned at a time) and computes, for every INT/DECIMAL column: `row_count`, `ndv` (number of distinct values), `min`, `max`, and a **3-bucket equi-width histogram** over `[min, max]`. `CREATE INDEX` does the same for its own column at build time, so a freshly built index is immediately costable. Statistics are persisted in `catalog.json` next to the index metadata. VARCHAR columns are not analyzed (the Phase 3 index keys INT/DECIMAL too).
+
+What the 5,000-row demo table actually stores after `ANALYZE Items`:
+
+```
+column price: row_count=5000  ndv=5000  min=1.00  max=50.99
+  bucket [ 1.00, 17.66): 1667 rows
+  bucket [17.66, 34.33): 1666 rows
+  bucket [34.33, 50.99]: 1667 rows
+column id:    row_count=5000  ndv=5000  min=1  max=5000  (same 3-bucket shape)
+```
+
+**Cardinality rules** (selectivity × `row_count`, clamped to `[0, row_count]`):
+
+- **Equality** → `row_count / NDV`. For `price = 25.55`: 5000 / 5000 = **1 row**.
+- **Range** → fractional histogram overlap: each bucket contributes `count × (overlap width / bucket width)`, i.e. rows are assumed **uniform within a bucket**. For `price > 1.5`: bucket 1 contributes 16.16/16.66 × 1667, buckets 2–3 contribute fully → 4950 rows.
+- **Conjunction (AND)** → `s1 × s2` — the **independence assumption**. This is an assumption, not a claim about the data; §5.4 shows exactly what it costs when it is violated.
+- **Disjunction (OR)** → `s1 + s2 − s1×s2` (inclusion–exclusion, which needs no independence).
+- **Unanalyzed column** (never `ANALYZE`d, or VARCHAR): conventional defaults — 0.1 for equality, 1/3 for a range. These are defaults, not measurements.
+
+**Histogram choice: 3-bucket equi-width, locked for the project.** Three buckets are few. The weakness is concrete: a predicate narrower than one bucket can only be localized to that bucket and then spread uniformly across it, and two range predicates on the *same* column are still multiplied under AND as if they were independent. Both failure modes are measured in §5.4 rather than hand-waved.
+
+### 5.2 Cost model
+
+```
+cost(plan) = pages_read × seq_page_cost  +  pages_random × rand_page_cost
+             seq_page_cost = 1.0          rand_page_cost = 4.0
+```
+
+These two constants are **chosen, not measured**: we assume a random page fetch costs four sequential reads, a conventional ratio for spinning disks that is generous to sequential scan on any storage. Operator costs:
+
+- `seq_scan_cost` = `pages(table)` — every page read once, sequentially.
+- `index_scan_cost` = `index_height + pages_of_matching_rows` — the tree descent reads `index_height` pages (sequential-priced; the path is short and buffer-resident), then the matching table pages are fetched by RID and priced as random reads, where `pages_of_matching_rows = ceil(matching_rows × pages(table) / row_count)`, clamped to `[1, pages(table)]`: matching rows are assumed to occupy their proportional share of the table's pages. For the demo table (`pages = 41`, `height = 8`): an equality lookup matches 1 row → `8 + 1×4 = 12`; `price > 1.5` matches 4,950 rows → all 41 pages → `8 + 41×4 = 172`.
+- `filter_cost` = child cost — predicate evaluation is CPU; the model counts page I/O only.
+- `sort_cost` = 0 while the data fits the 64-frame pool (512 KB), otherwise `2 × spill pages` (one write pass + one read pass).
+- `aggregate_cost` = child cost — hash aggregation is in-memory at this scale.
+- `nested_loop_join_cost` = `pages(outer) + rows(outer) × pages(inner)` — the inner side is rescanned once per outer row.
+
+An earlier draft charged **one random fetch per matching row** (`min(rows, pages)`). That formula contradicts the spec's `pages_of_matching_rows` and measured badly: it priced any predicate matching more than ~8 rows as a full-index sweep, so the optimizer chose a 2.6 ms SeqScan over a 1.4 ms index path on mid-selectivity queries. The density-based estimate fixed it (`fix(optimizer): price index scans by pages of matching rows`); §5.4's sweep is the before/after check.
+
+**Join-order enumeration (documented stretch item).** `EnumerateJoinOrders()` enumerates all `3! = 6` left-deep orders of a three-table join, costs each with the nested-loop formula above, and returns them cheapest-first; `test_join_order_enumeration` asserts all six orders appear exactly once, that costs are sorted, and that the cheapest plan starts from the smallest outer table (`Customers`: `10 + 800×41 + 800×5000×60`). Join-order search is **not wired into multi-table planning**: the planner keeps joins in their written order and applies cost-based choice only to single-table access paths, which is the locked Phase 4 scope.
+
+### 5.3 Access-path enumeration and plan output
+
+Enumeration is locked to exactly two candidates per single-table SELECT:
+
+1. `SeqScan → Filter` — always available, cost = `pages(table)`.
+2. `IndexScan → Filter` — generated only if an index exists on a column referenced by an equality/range predicate whose literal operands can be converted to key bounds; the index range encodes that predicate and the `Filter` above rechecks it (§4.6).
+
+The lower estimated cost wins; ties keep `SeqScan` (no speculative index seek). Both the chosen path and the rejected candidate are printed with costs, so the decision is auditable. Session flags `enable_index_scan = off` / `enable_seq_scan = off` force one path for measurement — that is how the same query is timed on both paths below. When `SET constraint_aware = on`, plan output additionally prints an `Applied rules:` line; **Phase 4 implements no rules**, so it currently reports `(none - constraint-aware rules arrive in Phase 4B)` — the hook exists and is test-covered, the rules R1–R4 do not (§6).
+
+**SeqScan wins** — `SELECT * FROM Items WHERE price > 1.5` (matches 4,949 of 5,000 rows; the index would touch the whole table plus tree descent, at 4× the page price):
+
+```
+Chosen access path: SeqScan+Filter
+Filter  [rows=4950.0, cost=41]
+  SeqScan(Items)  [rows=5000, cost=41]
+Rejected alternatives:
+  IndexScan(idx_price)+Filter  cost=172.0  rows=4950.0
+```
+
+Observed runtime, 5 runs each on the identical query: chosen SeqScan **3.7–7.7 ms** (median 4.4) vs. forced `--index` **8.5–10.8 ms** (median 9.3). The choice matches the faster path.
+
+**IndexScan wins** — `SELECT * FROM Items WHERE price = 25.55` (matches 1 row; keys `[2554, 2556]` are cents, widened by ±1 and rechecked by the Filter):
+
+```
+Chosen access path: IndexScan(idx_price)+Filter
+Filter  [rows=1, cost=12]
+  IndexScan(Items using idx_price on price, keys [2554, 2556])  [rows=1, cost=12]
+Rejected alternatives:
+  SeqScan+Filter  cost=41.0  rows=1.0
+```
+
+Observed runtime, 5 runs each: chosen IndexScan **0.043–0.063 ms** (median 0.048) vs. forced `--seq` **1.27–1.33 ms** (median 1.30) — about 27× faster, and again the choice matches the faster path.
+
+### 5.4 Verification: choice quality and estimation error
+
+**Selectivity sweep (Experiment 2).** For eight range predicates the optimizer picked a path, then both paths were timed on the same query via `--seq` / `--index` (one run each, idle machine):
+
+| Predicate | Rows actual | Chosen | SeqScan ms | IndexScan ms | Choice = faster? |
+|---|---|---|---|---|---|
+| `price > 44` | 699 | IndexScan | 1.931 | 1.251 | yes |
+| `price > 42` | 899 | IndexScan | 2.104 | 1.536 | yes |
+| `price > 40` | 1099 | SeqScan | 2.317 | 2.160 | no (0.16 ms — within noise) |
+| `price > 38` | 1299 | SeqScan | 2.630 | 2.639 | yes |
+| `price > 35` | 1599 | SeqScan | 2.084 | 2.855 | yes |
+| `price > 30` | 2099 | SeqScan | 3.146 | 4.192 | yes |
+| `price > 25` | 2599 | SeqScan | 2.997 | 5.987 | yes |
+| `price > 20` | 3099 | SeqScan | 3.164 | 5.772 | yes |
+
+7 of 8 agree outright; the single disagreement is 0.16 ms on a machine with ±0.5 ms run-to-run noise, i.e. a tie. The model's own crossover sits where it should: index cost `8 + 4×ceil(rows×41/5000)` drops below SeqScan's 41 at ≈975 matching rows, and the observed crossover lies between 899 (index wins) and 1099 (tie/seq wins). The two required cases (§5.3) both match the faster observed runtime with large margins.
+
+**Estimated vs. actual** (one run each; `estimation_error = rows_actual / rows_estimated`, so `25.00x` = 25× under-estimate and `0.11x` = ~9× over-estimate):
+
+**Table 3.** Estimation quality across query shapes on the 5,000-row `Items` table (`docs/evidence/phase4_cli_verify.txt` §6–7).
+
+| Query | rows_estimated | rows_actual | Error | Chosen path | est. cost | actual ms |
+|---|---|---|---|---|---|---|
+| `price = 25.55` | 1 | 1 | 1.00x | IndexScan | 12 | 0.052 |
+| `price > 1.5` | 4950 | 4949 | 1.00x | SeqScan | 41 | 3.928 |
+| `price < 2 OR price > 50` | 197 | 199 | 1.01x | SeqScan | 41 | 4.421 |
+| `COUNT(*) WHERE price > 49` | 1 | 1 | 1.00x | IndexScan | 16 | 0.301 |
+| `price > 40 AND price < 41` | 880 | 99 | **0.11x** | IndexScan | 40 | 0.242 |
+| `id > 4900 AND price > 49` | 4 | 100 | **25.00x** | IndexScan | 12 | 0.451 |
+| `AVG(price)` | 1 | 1 | 1.00x | SeqScan | 41 | 1.264 |
+| `ORDER BY price DESC` | 5000 | 5000 | 1.00x | SeqScan | 41 | 9.273 |
+
+**Honest notes / limitations.**
+
+(i) **The estimate can be badly wrong — here is one.** `id > 4900 AND price > 49` is estimated at **4 rows but returns 100** (25× under). On this table `price = 1 + 0.01 × (id − 1)`, so the two columns are deterministically related: `id > 4900` implies `price ≥ 50.01`, and every one of those 100 rows satisfies `price > 49` too. The AND rule multiplies `0.02 × 0.0398` as if the predicates were independent, when in truth they almost perfectly overlap. This is the independence assumption failing on correlated columns — the classic cardinality-estimation failure, reproduced on demand. (The plan choice still happened to be right: 12 vs. 41 is a wide margin, and the index path ran at 0.45 ms vs. 1.7 ms for SeqScan. Near the crossover, the same 25× error would flip the choice.)
+
+(ii) **Same-column conjunction over-estimates too.** `price > 40 AND price < 41` is estimated at **880 rows but returns 99** (≈9× over). Two causes compound: the product rule treats two overlapping ranges on one column as independent (`0.22 × 0.80` instead of the true `≈0.02`), and the 3-bucket histogram cannot localize a one-unit range inside the `[34.33, 50.99)` bucket, so it spreads rows uniformly. This is the locked histogram format's weakness, measured rather than asserted.
+
+(iii) **Statistics go stale.** `ANALYZE` / `CREATE INDEX` are the only refresh points; an `INSERT` after them is invisible to the estimator until the next `ANALYZE` (asserted by `test_analyze_and_create_index_collect_stats`). Nothing tracks incremental drift.
+
+(iv) **The cost model sees pages, not CPU.** Predicate evaluation, tuple materialization and result formatting are free in the model. At this table size that is second-order — the measured gap between paths is dominated by page traffic — but on a wider tuple or a costlier predicate it would matter.
+
+(v) **Enumeration is two candidates, full stop.** No full-index scan without a filter, no sort-then-search, no multi-table join reordering in the planner (§5.2), no constraint-aware rules (Phase 4B, §6). The sweep also shows the honest boundary of the model: within ±0.5 ms of the true crossover the model can pick either path and be "wrong" only by measurement noise.
+
+> **Plain-English summary**
+> - Statistics (`ANALYZE`, also run at `CREATE INDEX`) record per column: rows, distinct values, min, max, and a 3-bucket histogram; the estimator turns those plus the WHERE clause into a row count.
+> - Equality guesses `rows / distinct`; ranges use the histogram; `AND` multiplies (assuming independence — the risky one); `OR` adds with overlap removed.
+> - Cost = sequential reads × 1 + random reads × 4 (chosen constants). SeqScan reads every table page; index scan reads the tree plus the pages holding matching rows.
+> - The optimizer builds `SeqScan → Filter` and, if an index fits the predicate, `IndexScan → Filter`, prices both, and runs the cheaper one; `EXPLAIN` shows the winner *and* the loser with costs.
+> - Verified: the pick matches the faster measured path on both required examples and on 7 of 8 sweep points (the 8th is a 0.16 ms tie).
+> - Honest failures: a correlated conjunction estimated 4 rows vs. 100 actual (25×), and a narrow same-column range 880 vs. 99 — both are the independence assumption, not hidden anywhere.
 
 ---
 

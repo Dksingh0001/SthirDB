@@ -252,9 +252,9 @@
 - [x] Executor reports `actual_time_ms` and `rows_actual` back to the CLI output.
 - [x] Estimation-error reporting (`rows_estimated` vs `rows_actual`) implemented.
 - [x] `optimizer "<sql>"` CLI command prints chosen plan, estimated cost, actual time.
-- [ ] **Verify (Experiment 2 evidence):** run a query where SeqScan wins and one where IndexScan wins; both choices must match the faster observed runtime.
-- [ ] **Verify:** at least one query is documented where the estimate is badly wrong — this becomes honest "limitations" material for the report.
-- [ ] **Report contribution (single report, §5):** cost equations, cardinality assumptions, one SeqScan-wins and one IndexScan-wins `EXPLAIN` example, and the estimated-vs-actual table written into `docs/report.md` §5; raw outputs in `docs/evidence/`.
+- [x] **Verify (Experiment 2 evidence):** run a query where SeqScan wins and one where IndexScan wins; both choices must match the faster observed runtime.
+- [x] **Verify:** at least one query is documented where the estimate is badly wrong — this becomes honest "limitations" material for the report.
+- [x] **Report contribution (single report, §5):** cost equations, cardinality assumptions, one SeqScan-wins and one IndexScan-wins `EXPLAIN` example, and the estimated-vs-actual table written into `docs/report.md` §5; raw outputs in `docs/evidence/`.
 - [ ] Phase committed.
 
 ---
