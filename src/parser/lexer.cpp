@@ -46,6 +46,7 @@ std::string TokenTypeToString(TokenType type) {
     case TokenType::ABORT: return "ABORT";
     case TokenType::ROLLBACK: return "ROLLBACK";
     case TokenType::TRANSACTION: return "TRANSACTION";
+    case TokenType::CHECKPOINT: return "CHECKPOINT";
     case TokenType::ANALYZE: return "ANALYZE";
     case TokenType::EXPLAIN: return "EXPLAIN";
     case TokenType::PRIMARY: return "PRIMARY";
@@ -63,6 +64,9 @@ std::string TokenTypeToString(TokenType type) {
     case TokenType::SEMICOLON: return ";";
     case TokenType::DOT: return ".";
     case TokenType::STAR: return "*";
+    case TokenType::PLUS: return "+";
+    case TokenType::MINUS: return "-";
+    case TokenType::SLASH: return "/";
     case TokenType::EQ: return "=";
     case TokenType::NEQ: return "<>";
     case TokenType::LT: return "<";
@@ -120,6 +124,7 @@ const std::unordered_map<std::string, TokenType> kKeywords = {
     {"abort", TokenType::ABORT},
     {"rollback", TokenType::ROLLBACK},
     {"transaction", TokenType::TRANSACTION},
+    {"checkpoint", TokenType::CHECKPOINT},
     {"analyze", TokenType::ANALYZE},
     {"explain", TokenType::EXPLAIN},
     {"primary", TokenType::PRIMARY},
@@ -282,6 +287,9 @@ Token Lexer::ScanToken() {
     case ';': return Token{TokenType::SEMICOLON, ";", line_, start_col_};
     case '.': return Token{TokenType::DOT, ".", line_, start_col_};
     case '*': return Token{TokenType::STAR, "*", line_, start_col_};
+    case '+': return Token{TokenType::PLUS, "+", line_, start_col_};
+    case '-': return Token{TokenType::MINUS, "-", line_, start_col_};
+    case '/': return Token{TokenType::SLASH, "/", line_, start_col_};
     case '=': return Token{TokenType::EQ, "=", line_, start_col_};
     case '<':
       if (Match('>')) return Token{TokenType::NEQ, "<>", line_, start_col_};

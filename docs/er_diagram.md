@@ -58,6 +58,7 @@ erDiagram
 ```
 
 Notes:
+
 - `CHECK (StockLevel >= 0)` on `Items` backs optimizer rule R2/R2b.
 - `UNIQUE (Email)` on `Shoppers` backs rule R1.
 - `Purchases.ShopperID → Shoppers.ShopperID` (FK + NOT NULL) backs rules R3/R4.

@@ -53,6 +53,10 @@ class Page {
   // Tombstones the slot. Returns false if the slot is invalid or already free.
   bool DeleteTuple(uint16_t slot);
 
+  // Directly sets the tuple at `slot`. If bytes == nullptr or len == 0, tombstones the slot.
+  // Useful for ARIES Redo and Undo operations.
+  bool WriteTupleAt(uint16_t slot, const char* bytes, uint16_t len);
+
   // Moves every live tuple to the end of the page and rebuilds the slot
   // directory, reclaiming fragmented and tombstoned space. Live slot order is
   // preserved (tombstones vanish).

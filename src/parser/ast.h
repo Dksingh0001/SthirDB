@@ -278,7 +278,7 @@ class DeleteStmt : public SQLStatement {
 
 class TransactionStmt : public SQLStatement {
  public:
-  enum class Action { BEGIN, COMMIT, ROLLBACK };
+  enum class Action { BEGIN, COMMIT, ROLLBACK, CHECKPOINT };
 
   explicit TransactionStmt(Action act) : action_(act) {}
   StmtType type() const override { return StmtType::TRANSACTION; }

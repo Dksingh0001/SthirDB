@@ -31,7 +31,8 @@ void PrintUsage() {
       "  sthirdb analyze <table>     Refresh and persist column statistics.\n"
       "  sthirdb init_schema         Create ./data/retail and the Items table file.\n"
       "  sthirdb load_data --rows N  Bulk-insert N rows into Items.\n"
-      "  sthirdb count               Count live rows in Items.\n",
+      "  sthirdb count               Count live rows in Items.\n"
+      "  sthirdb recover             Run ARIES restart recovery over the WAL.\n",
       sthir::kVersion);
 }
 
@@ -317,6 +318,20 @@ int main(int argc, char** argv) {
       return 2;
     }
     return CmdCount();
+  }
+  if (cmd == "recover") {
+    sthir::Catalog catalog(sthir::kCatalogPath);
+    catalog.Load();
+    sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+    auto report = engine.Recover();
+    std::printf("Recovery completed:\n");
+    std::printf("  Analysis scanned : %zu records\n", report.analysis_records_scanned);
+    std::printf("  Redo applied     : %zu records\n", report.redo_records_applied);
+    std::printf("  Redo skipped     : %zu records\n", report.redo_records_skipped);
+    std::printf("  Undo applied     : %zu records\n", report.undo_records_applied);
+    std::printf("  Loser txns       : %zu\n", report.loser_txns.size());
+    std::printf("  Recovery time    : %.2f ms\n", report.recovery_time_ms);
+    return 0;
   }
 
   std::fprintf(stderr, "sthirdb: unknown command '%s'\n", cmd.c_str());

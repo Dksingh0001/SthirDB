@@ -5,6 +5,8 @@
 #include <vector>
 #include <unordered_map>
 #include <iostream>
+#include <mutex>
+#include <thread>
 
 #include "catalog/catalog.h"
 #include "exec/executor.h"
@@ -12,6 +14,7 @@
 #include "planner/plan_node.h"
 #include "storage/buffer_pool.h"
 #include "storage/disk_manager.h"
+#include "recovery/recovery_manager.h"
 
 namespace sthir {
 
@@ -49,6 +52,11 @@ class ExecutionEngine {
   void SetSessionFlag(const std::string& key, const std::string& val);
   std::string GetSessionFlag(const std::string& key) const;
 
+  RecoveryReport Recover();
+  class WalManager* wal_manager() const { return wal_.get(); }
+  class RecoveryManager* recovery_manager() const { return recovery_.get(); }
+  class LockManager* lock_manager() const { return lock_manager_.get(); }
+
  private:
   struct StorageContext {
     std::unique_ptr<DiskManager> dm;
@@ -60,10 +68,19 @@ class ExecutionEngine {
   StorageContext* GetIndexStorage(const std::string& path);
   std::unique_ptr<Executor> BuildExecutorTree(const PlanNode* plan);
 
+  uint32_t GetCurrentTxnId() const;
+  void SetCurrentTxnId(uint32_t tid);
+
+  mutable std::mutex engine_latch_;
   Catalog* catalog_;
   std::string data_dir_;
   std::unordered_map<std::string, std::unique_ptr<StorageContext>> storage_map_;
   std::unordered_map<std::string, std::string> session_flags_;
+  std::unordered_map<std::thread::id, uint32_t> thread_txns_;
+
+  std::unique_ptr<class WalManager> wal_;
+  std::unique_ptr<class RecoveryManager> recovery_;
+  std::unique_ptr<class LockManager> lock_manager_;
 };
 
 }  // namespace sthir

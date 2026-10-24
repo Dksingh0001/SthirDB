@@ -1,6 +1,7 @@
 #include "storage/buffer_pool.h"
 
 #include <stdexcept>
+#include "wal/wal_manager.h"
 
 namespace sthir {
 
@@ -52,7 +53,12 @@ Page* BufferPool::fetch_page(uint32_t page_id) {
 
   if (present_[f]) {
     // Victim from eviction: persist if dirty, then unmap the old page.
-    if (dirty_[f]) dm_->write_page(frame_page_id_[f], frames_[f].data());
+    if (dirty_[f]) {
+      if (wal_ && frames_[f].page_lsn() > 0) {
+        wal_->FlushUpTo(frames_[f].page_lsn());
+      }
+      dm_->write_page(frame_page_id_[f], frames_[f].data());
+    }
     page_to_frame_.erase(frame_page_id_[f]);
   }
 
@@ -84,6 +90,9 @@ bool BufferPool::flush_page(uint32_t page_id) {
   if (it == page_to_frame_.end()) return false;
   const int f = it->second;
   if (!dirty_[f]) return false;
+  if (wal_ && frames_[f].page_lsn() > 0) {
+    wal_->FlushUpTo(frames_[f].page_lsn());
+  }
   dm_->write_page(page_id, frames_[f].data());
   dirty_[f] = false;
   return true;
@@ -93,6 +102,9 @@ void BufferPool::flush_all() {
   std::lock_guard<std::mutex> lock(latch_);
   for (std::size_t f = 0; f < frames_.size(); ++f) {
     if (present_[f] && dirty_[f]) {
+      if (wal_ && frames_[f].page_lsn() > 0) {
+        wal_->FlushUpTo(frames_[f].page_lsn());
+      }
       dm_->write_page(frame_page_id_[f], frames_[f].data());
       dirty_[f] = false;
     }

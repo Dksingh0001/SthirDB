@@ -113,6 +113,45 @@ bool Page::DeleteTuple(uint16_t slot) {
   return true;
 }
 
+bool Page::WriteTupleAt(uint16_t slot, const char* bytes, uint16_t len) {
+  if (bytes == nullptr || len == 0) {
+    if (slot < slot_count()) {
+      write_slot(slot, Slot{0, 0});
+      return true;
+    }
+    return false;
+  }
+
+  // Ensure slot count covers slot
+  if (slot >= slot_count()) {
+    uint16_t old_count = slot_count();
+    set_slot_count(slot + 1);
+    for (uint16_t i = old_count; i < slot; ++i) {
+      write_slot(i, Slot{0, 0});
+    }
+  }
+
+  // If slot already has enough space in-place:
+  Slot current = slot_at(slot);
+  if (current.length > 0 && current.length >= len) {
+    std::memcpy(data_ + current.offset, bytes, len);
+    write_slot(slot, Slot{current.offset, len});
+    return true;
+  }
+
+  // Otherwise, allocate new space from free_space_ptr
+  const uint16_t dir_end = slot_dir_end();
+  if (free_space_ptr() < dir_end || free_space_ptr() - dir_end < len) {
+    return false;
+  }
+
+  const uint16_t tuple_off = static_cast<uint16_t>(free_space_ptr() - len);
+  std::memcpy(data_ + tuple_off, bytes, len);
+  set_free_space_ptr(tuple_off);
+  write_slot(slot, Slot{tuple_off, len});
+  return true;
+}
+
 void Page::compact() {
   // Collect live tuples in slot order, then rebuild the page image.
   std::vector<char> live;

@@ -75,7 +75,8 @@ std::unique_ptr<SQLStatement> Parser::ParseStatement() {
   if (Match(TokenType::UPDATE)) return ParseUpdate();
   if (Match(TokenType::DELETE)) return ParseDelete();
   if (Check(TokenType::BEGIN_KW) || Check(TokenType::COMMIT) ||
-      Check(TokenType::ABORT) || Check(TokenType::ROLLBACK)) {
+      Check(TokenType::ABORT) || Check(TokenType::ROLLBACK) ||
+      Check(TokenType::CHECKPOINT)) {
     return ParseTransaction();
   }
   if (Match(TokenType::ANALYZE)) return ParseAnalyze();
@@ -453,6 +454,7 @@ std::unique_ptr<TransactionStmt> Parser::ParseTransaction() {
   if (Match(TokenType::BEGIN_KW)) act = TransactionStmt::Action::BEGIN;
   else if (Match(TokenType::COMMIT)) act = TransactionStmt::Action::COMMIT;
   else if (Match(TokenType::ABORT) || Match(TokenType::ROLLBACK)) act = TransactionStmt::Action::ROLLBACK;
+  else if (Match(TokenType::CHECKPOINT)) act = TransactionStmt::Action::CHECKPOINT;
   else {
     SetError("expected transaction statement", Peek());
     return nullptr;
@@ -583,21 +585,13 @@ std::unique_ptr<Expr> Parser::ParseTerm() {
   auto expr = ParseFactor();
   if (!expr) return nullptr;
 
-  while (Check(TokenType::UNKNOWN)) {
-    // Check for + or -
-    if (Peek().lexeme == "+") {
-      Advance();
-      auto right = ParseFactor();
-      if (!right) return nullptr;
-      expr = std::make_unique<BinaryExpr>(BinaryOp::ADD, std::move(expr), std::move(right));
-    } else if (Peek().lexeme == "-") {
-      Advance();
-      auto right = ParseFactor();
-      if (!right) return nullptr;
-      expr = std::make_unique<BinaryExpr>(BinaryOp::SUB, std::move(expr), std::move(right));
-    } else {
-      break;
-    }
+  while (Match(TokenType::PLUS) || Match(TokenType::MINUS)) {
+    TokenType op_tok = Previous().type;
+    auto right = ParseFactor();
+    if (!right) return nullptr;
+    expr = std::make_unique<BinaryExpr>(
+        op_tok == TokenType::PLUS ? BinaryOp::ADD : BinaryOp::SUB,
+        std::move(expr), std::move(right));
   }
   return expr;
 }
@@ -606,20 +600,19 @@ std::unique_ptr<Expr> Parser::ParseFactor() {
   auto expr = ParseUnary();
   if (!expr) return nullptr;
 
-  while (Match(TokenType::STAR) || (Check(TokenType::UNKNOWN) && Peek().lexeme == "/")) {
-    bool is_star = Previous().type == TokenType::STAR;
-    if (!is_star) Advance();
+  while (Match(TokenType::STAR) || Match(TokenType::SLASH)) {
+    TokenType op_tok = Previous().type;
     auto right = ParseUnary();
     if (!right) return nullptr;
-    expr = std::make_unique<BinaryExpr>(is_star ? BinaryOp::MUL : BinaryOp::DIV,
-                                       std::move(expr), std::move(right));
+    expr = std::make_unique<BinaryExpr>(
+        op_tok == TokenType::STAR ? BinaryOp::MUL : BinaryOp::DIV,
+        std::move(expr), std::move(right));
   }
   return expr;
 }
 
 std::unique_ptr<Expr> Parser::ParseUnary() {
-  if (Check(TokenType::UNKNOWN) && Peek().lexeme == "-") {
-    Advance();
+  if (Match(TokenType::MINUS)) {
     auto child = ParseUnary();
     if (!child) return nullptr;
     return std::make_unique<UnaryExpr>(UnaryOp::NEGATE, std::move(child));
