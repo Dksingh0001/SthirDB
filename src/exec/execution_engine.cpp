@@ -15,6 +15,7 @@
 #include "planner/planner.h"
 #include "recovery/recovery_manager.h"
 #include "wal/wal_manager.h"
+#include "concurrency/lock_manager.h"
 
 namespace fs = std::filesystem;
 
@@ -106,6 +107,7 @@ ExecutionEngine::ExecutionEngine(Catalog* catalog, std::string data_dir)
   std::string wal_path = data_dir_ + "/wal.log";
   wal_ = std::make_unique<WalManager>(wal_path);
   recovery_ = std::make_unique<RecoveryManager>(wal_.get(), nullptr);
+  lock_manager_ = std::make_unique<LockManager>();
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -118,13 +120,13 @@ ExecutionEngine::~ExecutionEngine() {
 
 RecoveryReport ExecutionEngine::Recover() {
   if (catalog_) {
+    catalog_->Load();
     for (const auto& name : catalog_->GetTableNames()) {
-      GetStorage(name);
+      StorageContext* sc = GetStorage(name);
+      if (sc && sc->bp) {
+        recovery_->SetBufferPool(sc->bp.get());
+      }
     }
-  }
-  StorageContext* sc = GetStorage("items");
-  if (sc) {
-    recovery_->SetBufferPool(sc->bp.get());
   }
   return recovery_->Recover();
 }
@@ -139,7 +141,24 @@ std::string ExecutionEngine::GetSessionFlag(const std::string& key) const {
   return "";
 }
 
+uint32_t ExecutionEngine::GetCurrentTxnId() const {
+  std::lock_guard<std::mutex> lock(engine_latch_);
+  auto it = thread_txns_.find(std::this_thread::get_id());
+  if (it != thread_txns_.end()) return it->second;
+  return 0;
+}
+
+void ExecutionEngine::SetCurrentTxnId(uint32_t tid) {
+  std::lock_guard<std::mutex> lock(engine_latch_);
+  if (tid == 0) {
+    thread_txns_.erase(std::this_thread::get_id());
+  } else {
+    thread_txns_[std::this_thread::get_id()] = tid;
+  }
+}
+
 ExecutionEngine::StorageContext* ExecutionEngine::GetStorage(const std::string& table_name) {
+  std::lock_guard<std::mutex> lock(engine_latch_);
   std::string lower = ToLower(table_name);
   auto it = storage_map_.find(lower);
   if (it != storage_map_.end()) return it->second.get();
@@ -163,6 +182,7 @@ ExecutionEngine::StorageContext* ExecutionEngine::GetStorage(const std::string& 
 }
 
 ExecutionEngine::StorageContext* ExecutionEngine::GetIndexStorage(const std::string& path) {
+  std::lock_guard<std::mutex> lock(engine_latch_);
   const std::string key = "file:" + path;
   auto it = storage_map_.find(key);
   if (it != storage_map_.end()) return it->second.get();
@@ -379,16 +399,20 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     res.is_query = false;
     res.rows_affected = 0;
     if (tx->action() == TransactionStmt::Action::BEGIN) {
-      current_txn_id_ = recovery_->Begin();
+      SetCurrentTxnId(recovery_->Begin());
     } else if (tx->action() == TransactionStmt::Action::COMMIT) {
-      if (current_txn_id_ != 0) {
-        recovery_->Commit(current_txn_id_);
-        current_txn_id_ = 0;
+      uint32_t tid = GetCurrentTxnId();
+      if (tid != 0) {
+        recovery_->Commit(tid);
+        lock_manager_->ReleaseAll(tid);
+        SetCurrentTxnId(0);
       }
     } else if (tx->action() == TransactionStmt::Action::ROLLBACK) {
-      if (current_txn_id_ != 0) {
-        recovery_->Abort(current_txn_id_);
-        current_txn_id_ = 0;
+      uint32_t tid = GetCurrentTxnId();
+      if (tid != 0) {
+        recovery_->Abort(tid);
+        lock_manager_->ReleaseAll(tid);
+        SetCurrentTxnId(0);
       }
     } else if (tx->action() == TransactionStmt::Action::CHECKPOINT) {
       recovery_->Checkpoint(true);
@@ -505,7 +529,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     const auto* ip = static_cast<const InsertPlan*>(plan.get());
     StorageContext* sc = GetStorage(ip->table_name());
     recovery_->SetBufferPool(sc->bp.get());
-    uint32_t active_tid = current_txn_id_;
+    uint32_t active_tid = GetCurrentTxnId();
     bool auto_commit = false;
     if (active_tid == 0) {
       active_tid = recovery_->Begin();
@@ -513,15 +537,19 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     }
     std::string exec_err;
     size_t count = ExecuteInsert(*ip, sc->bp.get(), sc->dm.get(), &exec_err,
-                                 recovery_.get(), active_tid);
+                                 recovery_.get(), active_tid, lock_manager_.get());
     if (!exec_err.empty()) {
-      if (auto_commit) recovery_->Abort(active_tid);
+      if (auto_commit) {
+        recovery_->Abort(active_tid);
+        lock_manager_->ReleaseAll(active_tid);
+      }
       res.success = false;
       res.error_message = exec_err;
       return res;
     }
     if (auto_commit) {
       recovery_->Commit(active_tid);
+      lock_manager_->ReleaseAll(active_tid);
     }
     res.success = true;
     res.is_query = false;
@@ -533,7 +561,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     const auto* up = static_cast<const UpdatePlan*>(plan.get());
     StorageContext* sc = GetStorage(up->table_name());
     recovery_->SetBufferPool(sc->bp.get());
-    uint32_t active_tid = current_txn_id_;
+    uint32_t active_tid = GetCurrentTxnId();
     bool auto_commit = false;
     if (active_tid == 0) {
       active_tid = recovery_->Begin();
@@ -542,15 +570,19 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     auto child_exec = BuildExecutorTree(up->child());
     std::string exec_err;
     size_t count = ExecuteUpdate(*up, std::move(child_exec), sc->bp.get(), sc->dm.get(),
-                                 &exec_err, recovery_.get(), active_tid);
+                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get());
     if (!exec_err.empty()) {
-      if (auto_commit) recovery_->Abort(active_tid);
+      if (auto_commit) {
+        recovery_->Abort(active_tid);
+        lock_manager_->ReleaseAll(active_tid);
+      }
       res.success = false;
       res.error_message = exec_err;
       return res;
     }
     if (auto_commit) {
       recovery_->Commit(active_tid);
+      lock_manager_->ReleaseAll(active_tid);
     }
     res.success = true;
     res.is_query = false;
@@ -562,7 +594,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     const auto* dp = static_cast<const DeletePlan*>(plan.get());
     StorageContext* sc = GetStorage(dp->table_name());
     recovery_->SetBufferPool(sc->bp.get());
-    uint32_t active_tid = current_txn_id_;
+    uint32_t active_tid = GetCurrentTxnId();
     bool auto_commit = false;
     if (active_tid == 0) {
       active_tid = recovery_->Begin();
@@ -571,15 +603,19 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     auto child_exec = BuildExecutorTree(dp->child());
     std::string exec_err;
     size_t count = ExecuteDelete(*dp, std::move(child_exec), sc->bp.get(), sc->dm.get(),
-                                 &exec_err, recovery_.get(), active_tid);
+                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get());
     if (!exec_err.empty()) {
-      if (auto_commit) recovery_->Abort(active_tid);
+      if (auto_commit) {
+        recovery_->Abort(active_tid);
+        lock_manager_->ReleaseAll(active_tid);
+      }
       res.success = false;
       res.error_message = exec_err;
       return res;
     }
     if (auto_commit) {
       recovery_->Commit(active_tid);
+      lock_manager_->ReleaseAll(active_tid);
     }
     res.success = true;
     res.is_query = false;

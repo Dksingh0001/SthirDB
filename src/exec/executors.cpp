@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include "recovery/recovery_manager.h"
+#include "concurrency/lock_manager.h"
 
 namespace sthir {
 
@@ -481,7 +482,7 @@ void NestedLoopJoinExecutor::close() {
 // -------------------------------------------------------------
 
 size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
   if (!bp || !dm) {
     if (err) *err = "storage uninitialized";
     return 0;
@@ -550,6 +551,16 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
       }
     }
 
+    RID rid{cur_pid, static_cast<uint16_t>(slot), true};
+    if (lm && txn_id != 0) {
+      if (!lm->AcquireExclusive(txn_id, plan.table_name(), rid)) {
+        page->DeleteTuple(static_cast<uint16_t>(slot));
+        bp->unpin_page(cur_pid, true);
+        if (err) *err = "lock acquisition timeout";
+        return inserted_count;
+      }
+    }
+
     if (rm && txn_id != 0) {
       uint64_t lsn = rm->LogUpdate(txn_id, cur_pid, static_cast<uint16_t>(slot), 0, {}, bytes);
       page->set_page_lsn(lsn);
@@ -566,7 +577,7 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
 
 size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
   if (!child || !bp || !dm) {
     if (err) *err = "storage or child plan uninitialized";
     return 0;
@@ -583,16 +594,43 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
   }
   child->close();
 
+  if (lm && txn_id != 0) {
+    std::vector<RID> rids_to_lock;
+    for (const auto& tuple : matching_tuples) {
+      if (tuple.rid().is_valid) {
+        rids_to_lock.push_back(tuple.rid());
+      }
+    }
+    if (!lm->AcquireExclusiveBatch(txn_id, plan.table_name(), std::move(rids_to_lock))) {
+      if (err) *err = "lock acquisition timeout";
+      return 0;
+    }
+  }
+
   size_t updated_count = 0;
   for (auto& tuple : matching_tuples) {
     if (!tuple.rid().is_valid) continue;
 
-    // Apply assignments to create updated tuple
-    std::vector<Value> new_vals = tuple.values();
+    Page* p = bp->fetch_page(tuple.rid().page_id);
+    if (!p) continue;
+
+    int old_len = p->tuple_length(tuple.rid().slot_id);
+    if (old_len <= 0) {
+      bp->unpin_page(tuple.rid().page_id, false);
+      continue;
+    }
+    std::vector<char> old_bytes(old_len);
+    p->ReadTuple(tuple.rid().slot_id, old_bytes.data());
+
+    Tuple current_tuple = Tuple::Deserialize(old_bytes.data(), old_len, schema);
+    current_tuple.set_rid(tuple.rid());
+
+    // Apply assignments to create updated tuple using current under-lock state
+    std::vector<Value> new_vals = current_tuple.values();
     for (const auto& assign : plan.assignments()) {
       int idx = schema.FindColumnIndex(assign.first);
       if (idx >= 0 && idx < static_cast<int>(new_vals.size())) {
-        Value nv = EvaluateExpr(assign.second.get(), tuple, schema);
+        Value nv = EvaluateExpr(assign.second.get(), current_tuple, schema);
         new_vals[static_cast<size_t>(idx)] = nv.CastTo(schema.columns[idx].type);
       }
     }
@@ -600,55 +638,62 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
     Tuple updated_tuple(std::move(new_vals));
     std::vector<char> bytes = updated_tuple.Serialize(schema);
 
-    Page* p = bp->fetch_page(tuple.rid().page_id);
-    if (!p) continue;
-
-    std::vector<char> old_bytes;
-    int old_len = p->tuple_length(tuple.rid().slot_id);
-    if (old_len > 0) {
-      old_bytes.resize(old_len);
-      p->ReadTuple(tuple.rid().slot_id, old_bytes.data());
-    }
-
-    // Tombstone old slot
-    p->DeleteTuple(tuple.rid().slot_id);
-
-    // Try inserting into same page
-    int new_slot = p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()));
-    if (new_slot < 0) {
-      bp->unpin_page(tuple.rid().page_id, true);
-      // Append to last page
-      uint32_t last_pid = dm->num_pages() - 1;
-      Page* last_p = bp->fetch_page(last_pid);
-      if (last_p && (new_slot = last_p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()))) >= 0) {
-        if (rm && txn_id != 0) {
-          uint64_t lsn = rm->LogUpdate(txn_id, last_pid, static_cast<uint16_t>(new_slot), 0,
-                                       std::move(old_bytes), bytes);
-          last_p->set_page_lsn(lsn);
-        }
-        bp->unpin_page(last_pid, true);
-      } else {
-        if (last_p) bp->unpin_page(last_pid, false);
-        uint32_t new_pid = dm->allocate_page();
-        Page* new_p = bp->fetch_page(new_pid);
-        if (new_p) {
-          new_p->Reset(new_pid);
-          new_slot = new_p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()));
-          if (rm && txn_id != 0 && new_slot >= 0) {
-            uint64_t lsn = rm->LogUpdate(txn_id, new_pid, static_cast<uint16_t>(new_slot), 0,
-                                         std::move(old_bytes), bytes);
-            new_p->set_page_lsn(lsn);
-          }
-          bp->unpin_page(new_pid, true);
-        }
-      }
-    } else {
+    bool written = p->WriteTupleAt(tuple.rid().slot_id, bytes.data(), static_cast<uint16_t>(bytes.size()));
+    if (written) {
       if (rm && txn_id != 0) {
-        uint64_t lsn = rm->LogUpdate(txn_id, tuple.rid().page_id, static_cast<uint16_t>(new_slot), 0,
+        uint64_t lsn = rm->LogUpdate(txn_id, tuple.rid().page_id, tuple.rid().slot_id, 0,
                                      std::move(old_bytes), bytes);
         p->set_page_lsn(lsn);
       }
       bp->unpin_page(tuple.rid().page_id, true);
+    } else {
+      // Slot grew beyond available space: delete and re-insert
+      p->DeleteTuple(tuple.rid().slot_id);
+
+      int new_slot = p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()));
+      if (new_slot < 0) {
+        bp->unpin_page(tuple.rid().page_id, true);
+        // Append to last page
+        uint32_t last_pid = dm->num_pages() - 1;
+        Page* last_p = bp->fetch_page(last_pid);
+        if (last_p && (new_slot = last_p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()))) >= 0) {
+          if (lm && txn_id != 0) {
+            lm->AcquireExclusive(txn_id, plan.table_name(), RID{last_pid, static_cast<uint16_t>(new_slot), true});
+          }
+          if (rm && txn_id != 0) {
+            uint64_t lsn = rm->LogUpdate(txn_id, last_pid, static_cast<uint16_t>(new_slot), 0,
+                                         std::move(old_bytes), bytes);
+            last_p->set_page_lsn(lsn);
+          }
+          bp->unpin_page(last_pid, true);
+        } else {
+          if (last_p) bp->unpin_page(last_pid, false);
+          uint32_t new_pid = dm->allocate_page();
+          Page* new_p = bp->fetch_page(new_pid);
+          if (new_p) {
+            new_p->Reset(new_pid);
+            new_slot = new_p->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()));
+            if (new_slot >= 0) {
+              if (lm && txn_id != 0) {
+                lm->AcquireExclusive(txn_id, plan.table_name(), RID{new_pid, static_cast<uint16_t>(new_slot), true});
+              }
+              if (rm && txn_id != 0) {
+                uint64_t lsn = rm->LogUpdate(txn_id, new_pid, static_cast<uint16_t>(new_slot), 0,
+                                             std::move(old_bytes), bytes);
+                new_p->set_page_lsn(lsn);
+              }
+            }
+            bp->unpin_page(new_pid, true);
+          }
+        }
+      } else {
+        if (rm && txn_id != 0) {
+          uint64_t lsn = rm->LogUpdate(txn_id, tuple.rid().page_id, static_cast<uint16_t>(new_slot), 0,
+                                       std::move(old_bytes), bytes);
+          p->set_page_lsn(lsn);
+        }
+        bp->unpin_page(tuple.rid().page_id, true);
+      }
     }
 
     ++updated_count;
@@ -660,9 +705,9 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
   return updated_count;
 }
 
-size_t ExecuteDelete(const DeletePlan& /*plan*/, std::unique_ptr<Executor> child,
+size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* /*dm*/, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
   if (!child || !bp) {
     if (err) *err = "storage or child plan uninitialized";
     return 0;
@@ -678,6 +723,13 @@ size_t ExecuteDelete(const DeletePlan& /*plan*/, std::unique_ptr<Executor> child
     }
   }
   child->close();
+
+  if (lm && txn_id != 0) {
+    if (!lm->AcquireExclusiveBatch(txn_id, plan.table_name(), rids_to_delete)) {
+      if (err) *err = "lock acquisition timeout";
+      return 0;
+    }
+  }
 
   size_t deleted_count = 0;
   for (const auto& rid : rids_to_delete) {
@@ -711,3 +763,4 @@ size_t ExecuteDelete(const DeletePlan& /*plan*/, std::unique_ptr<Executor> child
 }
 
 }  // namespace sthir
+

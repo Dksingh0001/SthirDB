@@ -568,9 +568,46 @@ Crash-injection harness design, 1,000+ trial results and invariants, mutation-te
 
 ## 9. Benchmark & Evaluation
 
-_Drafted in Phase 7._
+### 9.1 Concurrency Control & Strict 2PL (Phase 6)
 
-Anomaly tables (constrained vs unconstrained), latency tables, `EXPLAIN` evidence, comparison with Yuan 2026. Placeholder.
+To support concurrent transactions and prevent dirty reads, non-repeatable reads, and lost updates, SthirDB implements a row-level Lock Manager enforcing **Strict Two-Phase Locking (Strict 2PL)**.
+
+#### Architecture and Lock Protocol
+1. **Lock Granularity & Modes:** Locks are tracked in an in-memory lock table keyed by `(table_name, page_id, slot_id)`. Two lock modes are supported:
+   - **Shared (S):** Compatible with other Shared lock holders; multiple concurrent readers can access the same row.
+   - **Exclusive (X):** Incompatible with both Shared and Exclusive locks; grants single-writer access.
+2. **FIFO Queue Fairness:** When a transaction requests an Exclusive lock while Shared holders exist, the request is queued in a FIFO waiting queue (`std::deque<LockRequest>`). Subsequent Shared lock requests are queued behind the waiting Exclusive request, preventing reader-induced writer starvation.
+3. **Strict 2PL Discipline:** All Exclusive and Shared locks acquired by a transaction are held until the transaction finishes. Upon `COMMIT` or `ROLLBACK` (or automatic transaction commit/abort), `LockManager::ReleaseAll(txn_id)` atomically releases all held locks and unblocks queued waiters via condition variable notification. Holding Exclusive locks to transaction termination ensures strict execution schedules, preventing dirty reads and cascading aborts.
+4. **Deadlock Avoidance Strategy:** Rather than incurring runtime cycle-detection overhead with a wait-for graph, SthirDB implements **Global Lock Ordering**:
+   - Multi-row operations invoke `LockManager::AcquireExclusiveBatch`, which sorts the target `(page_id, slot_id)` keys in ascending order prior to acquisition.
+   - Because all transactions acquire locks in the identical total order, cyclical wait-for dependencies are structurally impossible.
+   - As a fail-safe against adversarial timing or single-lock deadlocks, lock acquisition enforces a configurable timeout (`timeout_ms = 3000 ms`), aborting and rolling back if a lock cannot be obtained within the timeout window.
+5. **ARIES & Concurrency Interaction:** Locks are ephemeral in-memory synchronization constructs and are intentionally **never written to the WAL**. Recovery passes (Analysis, Redo, Undo) operate directly on physical/physiological page images without requiring or holding locks. Following restart recovery, the lock table starts completely empty and unburdened by crash artifacts.
+
+#### Empirical Verification
+The concurrency subsystem is verified by the test suite `test/test_concurrency.cpp` (recorded in `docs/evidence/phase6_tests.txt`), validating all 6 core concurrency invariants:
+
+**Table 6.** Phase 6 Concurrency Control and Strict 2PL Verification Suite.
+
+| Test Case | Scenario / Invariant Tested | Execution Detail | Result | Status |
+|---|---|---|---|---|
+| **Test 1** | S/X Mode Compatibility & FIFO Fairness | 2 concurrent readers granted S; writer waits; subsequent reader queues behind writer; writer granted upon reader release | Writer unblocked immediately after readers release; no writer starvation | **PASS** |
+| **Test 2** | Global Lock Ordering Deadlock Avoidance | Two concurrent transactions acquiring {r1, r2, r3} in opposite orders via `AcquireExclusiveBatch` | Sorted acquisition order guarantees both transactions complete without deadlock | **PASS** |
+| **Test 3** | Strict 2PL Release on Abort | Txn 201 acquires locks and aborts; queued Txn 202 unblocked | `ReleaseAll(txn_id)` frees all locks on rollback; Txn 202 granted lock | **PASS** |
+| **Test 4** | Two-Thread Serialized Execution | 2 concurrent threads updating the same row (`val += 50` and `val += 30` from 100) | In-place update under Exclusive lock serializes updates to exactly **180**; zero lost updates | **PASS** |
+| **Test 5** | Multi-Thread High Concurrency Stress | 10 concurrent threads × 100 increments on a single row (1,000 total updates) | All 1,000 queries succeed atomically; final counter is exactly **1,000** | **PASS** |
+| **Test 6** | Concurrency + ARIES Crash Recovery | Concurrent transactions (committed + aborted + in-flight) interrupted by crash, restart engine and run `Recover()` | ARIES recovers committed changes (1200), keeps aborted restored (1000), undoes in-flight (1000); lock table reset to 0 | **PASS** |
+
+> **Plain-English summary**
+> - SthirDB implements row-level Strict 2PL concurrency control with Shared and Exclusive locks.
+> - A FIFO wait queue guarantees fair scheduling without writer starvation.
+> - Deadlocks are prevented by global lock ordering (`AcquireExclusiveBatch` sorts keys ascending) combined with a 3-second timeout safety net.
+> - When transactions commit or abort, all locks are atomically freed, avoiding cascading rollbacks.
+> - 10 concurrent threads executing 1,000 updates on a single row execute without lost updates or race conditions, reaching the exact expected value of 1,000.
+> - Crashes during concurrent workloads recover cleanly through ARIES without lock-related corruption.
+
+### 9.2 Benchmark & Anomaly Evaluation (Phase 7)
+_Drafted in Phase 7._ Anomaly tables (constrained vs unconstrained), latency tables, `EXPLAIN` evidence, comparison with Yuan 2026. Placeholder.
 
 ---
 

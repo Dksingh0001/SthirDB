@@ -20,6 +20,7 @@ enum class TokenType {
 
   // Symbols & Operators
   LPAREN, RPAREN, COMMA, SEMICOLON, DOT, STAR,
+  PLUS, MINUS, SLASH,
   EQ, NEQ, LT, LTE, GT, GTE,
 
   // Literals & Identifiers

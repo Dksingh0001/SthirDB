@@ -481,18 +481,18 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 - **Interaction with ARIES:** locks are *not* logged; they are rebuilt/handled separately from the WAL. Make sure the redo/undo passes do not assume locks are held.
 
 ### Checklist
-- [ ] Lock table data structure implemented.
-- [ ] S/X lock acquisition with FIFO fairness implemented.
-- [ ] Blocking/queuing of conflicting requests implemented.
-- [ ] Strict 2PL release-at-commit/abort implemented.
-- [ ] Deadlock strategy implemented (wait-for graph OR global lock ordering) and documented in `docs/design.md`.
-- [ ] Lock manager integrated into UPDATE/DELETE/INSERT executors.
-- [ ] Transaction abort releases all held locks.
-- [ ] Concurrency test: two threads updating the same row — verify serialization and no lost update.
-- [ ] Concurrency test: 10 threads × 100 increments — final value exactly correct.
-- [ ] **Verify interaction:** crash during concurrent execution, restart, confirm ARIES still restores correctness with no lock-related corruption.
-- [ ] **Report decision (single report):** results added to `docs/report.md` §9, **or** the phase recorded as deferred in §11 — decided *in this phase*, not deferred to Phase 8.
-- [ ] Phase committed (or explicitly marked deferred in the report).
+- [x] Lock table data structure implemented.
+- [x] S/X lock acquisition with FIFO fairness implemented.
+- [x] Blocking/queuing of conflicting requests implemented.
+- [x] Strict 2PL release-at-commit/abort implemented.
+- [x] Deadlock strategy implemented (wait-for graph OR global lock ordering) and documented in `docs/design.md`.
+- [x] Lock manager integrated into UPDATE/DELETE/INSERT executors.
+- [x] Transaction abort releases all held locks.
+- [x] Concurrency test: two threads updating the same row — verify serialization and no lost update.
+- [x] Concurrency test: 10 threads × 100 increments — final value exactly correct.
+- [x] **Verify interaction:** crash during concurrent execution, restart, confirm ARIES still restores correctness with no lock-related corruption.
+- [x] **Report decision (single report):** results added to `docs/report.md` §9, **or** the phase recorded as deferred in §11 — decided *in this phase*, not deferred to Phase 8.
+- [x] Phase committed (or explicitly marked deferred in the report).
 
 ---
 

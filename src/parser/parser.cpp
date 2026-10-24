@@ -585,21 +585,13 @@ std::unique_ptr<Expr> Parser::ParseTerm() {
   auto expr = ParseFactor();
   if (!expr) return nullptr;
 
-  while (Check(TokenType::UNKNOWN)) {
-    // Check for + or -
-    if (Peek().lexeme == "+") {
-      Advance();
-      auto right = ParseFactor();
-      if (!right) return nullptr;
-      expr = std::make_unique<BinaryExpr>(BinaryOp::ADD, std::move(expr), std::move(right));
-    } else if (Peek().lexeme == "-") {
-      Advance();
-      auto right = ParseFactor();
-      if (!right) return nullptr;
-      expr = std::make_unique<BinaryExpr>(BinaryOp::SUB, std::move(expr), std::move(right));
-    } else {
-      break;
-    }
+  while (Match(TokenType::PLUS) || Match(TokenType::MINUS)) {
+    TokenType op_tok = Previous().type;
+    auto right = ParseFactor();
+    if (!right) return nullptr;
+    expr = std::make_unique<BinaryExpr>(
+        op_tok == TokenType::PLUS ? BinaryOp::ADD : BinaryOp::SUB,
+        std::move(expr), std::move(right));
   }
   return expr;
 }
@@ -608,20 +600,19 @@ std::unique_ptr<Expr> Parser::ParseFactor() {
   auto expr = ParseUnary();
   if (!expr) return nullptr;
 
-  while (Match(TokenType::STAR) || (Check(TokenType::UNKNOWN) && Peek().lexeme == "/")) {
-    bool is_star = Previous().type == TokenType::STAR;
-    if (!is_star) Advance();
+  while (Match(TokenType::STAR) || Match(TokenType::SLASH)) {
+    TokenType op_tok = Previous().type;
     auto right = ParseUnary();
     if (!right) return nullptr;
-    expr = std::make_unique<BinaryExpr>(is_star ? BinaryOp::MUL : BinaryOp::DIV,
-                                       std::move(expr), std::move(right));
+    expr = std::make_unique<BinaryExpr>(
+        op_tok == TokenType::STAR ? BinaryOp::MUL : BinaryOp::DIV,
+        std::move(expr), std::move(right));
   }
   return expr;
 }
 
 std::unique_ptr<Expr> Parser::ParseUnary() {
-  if (Check(TokenType::UNKNOWN) && Peek().lexeme == "-") {
-    Advance();
+  if (Match(TokenType::MINUS)) {
     auto child = ParseUnary();
     if (!child) return nullptr;
     return std::make_unique<UnaryExpr>(UnaryOp::NEGATE, std::move(child));

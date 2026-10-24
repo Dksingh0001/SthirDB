@@ -190,15 +190,19 @@ class NestedLoopJoinExecutor : public Executor {
 
 // Forward declaration
 class RecoveryManager;
+class LockManager;
 
 // DML execution functions that directly mutate slotted-page storage
 size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
+                     LockManager* lm = nullptr);
 size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
+                     LockManager* lm = nullptr);
 size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0);
+                     RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
+                     LockManager* lm = nullptr);
 
 }  // namespace sthir
