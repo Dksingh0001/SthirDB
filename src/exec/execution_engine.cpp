@@ -5,6 +5,9 @@
 #include <sstream>
 
 #include "exec/executors.h"
+#include "index/bplus_tree.h"
+#include "index/index_builder.h"
+#include "index/index_scan.h"
 #include "parser/lexer.h"
 #include "parser/parser.h"
 #include "planner/planner.h"
@@ -126,6 +129,20 @@ ExecutionEngine::StorageContext* ExecutionEngine::GetStorage(const std::string& 
   return ptr;
 }
 
+ExecutionEngine::StorageContext* ExecutionEngine::GetIndexStorage(const std::string& path) {
+  const std::string key = "file:" + path;
+  auto it = storage_map_.find(key);
+  if (it != storage_map_.end()) return it->second.get();
+
+  auto sc = std::make_unique<StorageContext>();
+  sc->dm = std::make_unique<DiskManager>(path);
+  sc->bp = std::make_unique<BufferPool>(kDefaultPoolFrames, sc->dm.get());
+
+  auto* ptr = sc.get();
+  storage_map_[key] = std::move(sc);
+  return ptr;
+}
+
 std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* plan) {
   if (!plan) return nullptr;
 
@@ -135,6 +152,19 @@ std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* pla
       StorageContext* sc = GetStorage(scan->table_name());
       return std::make_unique<SeqScanExecutor>(
           scan->table_name(), scan->output_schema(), sc->bp.get(), sc->dm.get());
+    }
+    case PlanNodeType::INDEX_SCAN: {
+      const auto* idx_scan = static_cast<const IndexScanPlan*>(plan);
+      StorageContext* table = GetStorage(idx_scan->table_name());
+      const std::string path = IndexFilePath(idx_scan->output_schema(), idx_scan->index().index_name);
+      StorageContext* index = GetIndexStorage(path);
+      auto tree = std::make_unique<BPlusTree>(index->dm.get(), index->bp.get(),
+                                              idx_scan->index().root_page_id,
+                                              idx_scan->index().height);
+      auto pred = idx_scan->predicate() ? idx_scan->predicate()->Clone() : nullptr;
+      return std::make_unique<IndexScanExecutor>(
+          idx_scan->table_name(), idx_scan->output_schema(), table->bp.get(), table->dm.get(),
+          std::move(tree), idx_scan->key_column(), idx_scan->range(), std::move(pred));
     }
     case PlanNodeType::FILTER: {
       const auto* f = static_cast<const FilterPlan*>(plan);
@@ -240,7 +270,61 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     return res;
   }
 
-  // 2. Control statements
+  // 2. DDL: CREATE INDEX
+  if (stmt->type() == StmtType::CREATE_INDEX) {
+    auto* ci = static_cast<CreateIndexStmt*>(stmt.get());
+    const TableSchema* schema = catalog_ ? catalog_->GetTable(ci->table_name) : nullptr;
+    if (schema == nullptr) {
+      res.success = false;
+      res.error_message = "table '" + ci->table_name + "' does not exist";
+      return res;
+    }
+    const int col_idx = schema->FindColumnIndex(ci->column_name);
+    if (col_idx < 0) {
+      res.success = false;
+      res.error_message = "column '" + ci->column_name + "' not found in table '" +
+                          schema->table_name + "'";
+      return res;
+    }
+    for (const auto& existing : schema->indexes) {
+      if (ToLower(existing.index_name) == ToLower(ci->index_name)) {
+        res.success = false;
+        res.error_message = "index '" + ci->index_name + "' already exists on table '" +
+                            schema->table_name + "'";
+        return res;
+      }
+    }
+
+    StorageContext* sc = GetStorage(schema->table_name);
+    std::string build_err;
+    IndexBuildResult built;
+    if (!BuildIndex(*schema, ci->index_name, schema->columns[col_idx].name, sc->dm.get(),
+                    sc->bp.get(), &built, &build_err)) {
+      res.success = false;
+      res.error_message = build_err;
+      return res;
+    }
+
+    IndexMetadata meta;
+    meta.index_name = ci->index_name;
+    meta.column_name = schema->columns[col_idx].name;
+    meta.root_page_id = built.root_page_id;
+    meta.height = built.height;
+    meta.order = kIndexOrder;
+    std::string catalog_err;
+    if (!catalog_->AddIndex(schema->table_name, meta, &catalog_err)) {
+      res.success = false;
+      res.error_message = catalog_err;
+      return res;
+    }
+
+    res.success = true;
+    res.is_query = false;
+    res.rows_affected = built.entries;
+    return res;
+  }
+
+  // 3. Control statements
   if (stmt->type() == StmtType::TRANSACTION) {
     auto* tx = static_cast<TransactionStmt*>(stmt.get());
     res.success = true;
@@ -272,7 +356,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     return res;
   }
 
-  // 3. EXPLAIN
+  // 4. EXPLAIN
   if (stmt->type() == StmtType::EXPLAIN) {
     auto* exp = static_cast<ExplainStmt*>(stmt.get());
     Planner planner(*catalog_);
@@ -290,7 +374,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     return res;
   }
 
-  // 4. DML & Queries via Planner
+  // 5. DML & Queries via Planner
   Planner planner(*catalog_);
   std::string plan_err;
   auto plan = planner.CreatePlan(*stmt, &plan_err);

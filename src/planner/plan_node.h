@@ -6,12 +6,14 @@
 #include <utility>
 
 #include "catalog/catalog.h"
+#include "index/index_scan.h"
 #include "parser/ast.h"
 
 namespace sthir {
 
 enum class PlanNodeType {
   SEQ_SCAN,
+  INDEX_SCAN,
   FILTER,
   PROJECT,
   AGGREGATE,
@@ -53,6 +55,48 @@ class SeqScanPlan : public PlanNode {
  private:
   std::string table_name_;
   TableSchema schema_;
+};
+
+// Index access path: fetches the RIDs inside `range` from the B+tree described
+// by `index`, then rechecks `predicate` on every fetched tuple (the bounds are
+// widened, and stale/deleted RIDs must be ignored), so it is a drop-in
+// replacement for SeqScan + Filter.
+class IndexScanPlan : public PlanNode {
+ public:
+  IndexScanPlan(std::string table_name, TableSchema schema, IndexMetadata index,
+                size_t key_column, KeyRange range, std::unique_ptr<Expr> predicate)
+      : table_name_(std::move(table_name)),
+        schema_(std::move(schema)),
+        index_(std::move(index)),
+        key_column_(key_column),
+        range_(range),
+        predicate_(std::move(predicate)) {}
+
+  PlanNodeType type() const override { return PlanNodeType::INDEX_SCAN; }
+  const TableSchema& output_schema() const override { return schema_; }
+
+  const std::string& table_name() const { return table_name_; }
+  const IndexMetadata& index() const { return index_; }
+  size_t key_column() const { return key_column_; }
+  const KeyRange& range() const { return range_; }
+  const Expr* predicate() const { return predicate_.get(); }
+
+  std::vector<const PlanNode*> children() const override { return {}; }
+  std::string ToString(int indent = 0) const override {
+    std::string s = IndentStr(indent) + "IndexScan(" + table_name_ + " using " +
+                    index_.index_name + " on " + index_.column_name + ", keys ";
+    s += range_.has_lo ? "[" + std::to_string(range_.lo) : "(-inf";
+    s += range_.has_hi ? ", " + std::to_string(range_.hi) + "]" : ", +inf)";
+    return s + ")\n";
+  }
+
+ private:
+  std::string table_name_;
+  TableSchema schema_;
+  IndexMetadata index_;
+  size_t key_column_ = 0;
+  KeyRange range_;
+  std::unique_ptr<Expr> predicate_;
 };
 
 class FilterPlan : public PlanNode {

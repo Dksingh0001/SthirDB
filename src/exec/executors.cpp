@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 namespace sthir {
 
@@ -72,6 +73,71 @@ void SeqScanExecutor::close() {
     cur_page_ = nullptr;
   }
 }
+
+// -------------------------------------------------------------
+// IndexScanExecutor
+// -------------------------------------------------------------
+
+IndexScanExecutor::IndexScanExecutor(std::string table_name,
+                                     TableSchema schema,
+                                     BufferPool* bp,
+                                     DiskManager* dm,
+                                     std::unique_ptr<BPlusTree> tree,
+                                     size_t key_column,
+                                     KeyRange range,
+                                     std::unique_ptr<Expr> predicate)
+    : table_name_(std::move(table_name)),
+      schema_(std::move(schema)),
+      bp_(bp),
+      dm_(dm),
+      tree_(std::move(tree)),
+      key_column_(key_column),
+      range_(range),
+      predicate_(std::move(predicate)) {}
+
+void IndexScanExecutor::init() {
+  rids_.clear();
+  rid_idx_ = 0;
+  if (!tree_ || range_.IsEmpty()) return;
+  const int64_t lo = range_.has_lo ? range_.lo : std::numeric_limits<int64_t>::min();
+  const int64_t hi = range_.has_hi ? range_.hi : std::numeric_limits<int64_t>::max();
+  rids_ = tree_->RangeScan(lo, hi);
+}
+
+std::optional<Tuple> IndexScanExecutor::next() {
+  if (!dm_ || !bp_) return std::nullopt;
+
+  while (rid_idx_ < rids_.size()) {
+    const IndexRid rid = rids_[rid_idx_++];
+    if (rid.page_id >= dm_->num_pages()) continue;  // table replaced under the index
+
+    Page* page = bp_->fetch_page(rid.page_id);
+    if (page == nullptr) return std::nullopt;
+    if (rid.slot_id >= page->slot_count() || !page->tuple_alive(rid.slot_id)) {
+      bp_->unpin_page(rid.page_id, false);
+      continue;  // tombstoned after the index was built
+    }
+
+    std::vector<char> buf(page->tuple_length(rid.slot_id));
+    const int bytes = buf.empty() ? 0 : page->ReadTuple(rid.slot_id, buf.data());
+    if (bytes <= 0) {
+      bp_->unpin_page(rid.page_id, false);
+      continue;
+    }
+    Tuple tuple = Tuple::Deserialize(buf.data(), static_cast<uint16_t>(bytes), schema_);
+    bp_->unpin_page(rid.page_id, false);
+    if (tuple.is_deleted()) continue;
+
+    tuple.set_rid(RID{rid.page_id, rid.slot_id, true});
+    if (predicate_ && EvaluatePredicate(predicate_.get(), tuple, schema_) != Tribool::True) {
+      continue;
+    }
+    return tuple;
+  }
+  return std::nullopt;
+}
+
+void IndexScanExecutor::close() {}
 
 // -------------------------------------------------------------
 // FilterExecutor

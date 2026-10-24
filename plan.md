@@ -205,8 +205,8 @@
 - [x] `lookup(key) -> RID[]` implemented (handles duplicate keys).
 - [x] `range_scan(lo, hi) -> RID[]` implemented via leaf links.
 - [x] All node accesses routed through the buffer pool with correct pin/unpin.
-- [ ] `CREATE INDEX idx ON t (col)` DDL parsed and executed (build by scanning the table).
-- [ ] `IndexScan` RA node + executor implemented.
+- [x] `CREATE INDEX idx ON t (col)` DDL parsed and executed (build by scanning the table).
+- [x] `IndexScan` RA node + executor implemented.
 - [ ] Unit test: insert 10,000 ascending keys and verify lookups + range scans.
 - [ ] Unit test: insert 10,000 random keys (adversarial order) and verify.
 - [ ] Unit test: duplicate keys return all matching RIDs.

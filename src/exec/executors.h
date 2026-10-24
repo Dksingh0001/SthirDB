@@ -9,6 +9,8 @@
 #include "catalog/catalog.h"
 #include "exec/executor.h"
 #include "exec/expr_eval.h"
+#include "index/bplus_tree.h"
+#include "index/index_scan.h"
 #include "parser/ast.h"
 #include "planner/plan_node.h"
 #include "storage/buffer_pool.h"
@@ -40,6 +42,42 @@ class SeqScanExecutor : public Executor {
   uint16_t cur_slot_ = 0;
   Page* cur_page_ = nullptr;
   uint32_t total_pages_ = 0;
+};
+
+// Reads RIDs from a B+tree range scan, fetches each base tuple by RID, drops
+// RIDs whose slot was deleted after the index was built, and rechecks the
+// predicate so index bounds only have to be a superset of the true matches.
+class IndexScanExecutor : public Executor {
+ public:
+  IndexScanExecutor(std::string table_name,
+                    TableSchema schema,
+                    BufferPool* bp,
+                    DiskManager* dm,
+                    std::unique_ptr<BPlusTree> tree,
+                    size_t key_column,
+                    KeyRange range,
+                    std::unique_ptr<Expr> predicate);
+
+  void init() override;
+  std::optional<Tuple> next() override;
+  void close() override;
+
+  const TableSchema& output_schema() const override { return schema_; }
+  // Number of RIDs the range scan produced in the last init().
+  size_t indexed_rid_count() const { return rids_.size(); }
+
+ private:
+  std::string table_name_;
+  TableSchema schema_;
+  BufferPool* bp_;
+  DiskManager* dm_;
+  std::unique_ptr<BPlusTree> tree_;
+  size_t key_column_;
+  KeyRange range_;
+  std::unique_ptr<Expr> predicate_;
+
+  std::vector<IndexRid> rids_;
+  size_t rid_idx_ = 0;
 };
 
 class FilterExecutor : public Executor {

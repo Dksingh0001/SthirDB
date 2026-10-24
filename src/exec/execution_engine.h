@@ -43,6 +43,8 @@ class ExecutionEngine {
   };
 
   StorageContext* GetStorage(const std::string& table_name);
+  // Opens (once) the storage for an index file, keyed by its path.
+  StorageContext* GetIndexStorage(const std::string& path);
   std::unique_ptr<Executor> BuildExecutorTree(const PlanNode* plan);
 
   Catalog* catalog_;

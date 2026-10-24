@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "index/index_scan.h"
+
 namespace sthir {
 
 namespace {
@@ -146,6 +148,25 @@ bool ValidateExprColumns(const Expr* expr, const TableSchema& schema, std::strin
   return true;
 }
 
+// Phase 3 access-path rule: use an existing index whenever the WHERE clause
+// yields key bounds on the indexed column. Deliberately unconditional — Phase 4
+// replaces this with the cost-based choice between SeqScan and IndexScan.
+const IndexMetadata* FindUsableIndex(const TableSchema& schema, const Expr* where,
+                                     size_t* key_column, KeyRange* range) {
+  if (!where) return nullptr;
+  for (const auto& index : schema.indexes) {
+    const int col = schema.FindColumnIndex(index.column_name);
+    if (col < 0) continue;
+    KeyRange candidate;
+    if (!ExtractKeyRange(where, schema, static_cast<size_t>(col), &candidate)) continue;
+    if (candidate.IsEmpty()) continue;
+    *key_column = static_cast<size_t>(col);
+    *range = candidate;
+    return &index;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::CreatePlan(const SQLStatement& stmt, std::string* err) {
@@ -228,9 +249,20 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
     if (!ValidateExprColumns(stmt.where_clause.get(), current_schema, err)) {
       return nullptr;
     }
-    current_plan = std::make_unique<FilterPlan>(
-        CloneExpr(stmt.where_clause.get()),
-        std::move(current_plan));
+    size_t key_column = 0;
+    KeyRange range;
+    const IndexMetadata* index =
+        stmt.has_join ? nullptr
+                      : FindUsableIndex(*from_schema, stmt.where_clause.get(), &key_column, &range);
+    if (index != nullptr) {
+      current_plan = std::make_unique<IndexScanPlan>(from_schema->table_name, *from_schema,
+                                                     *index, key_column, range,
+                                                     CloneExpr(stmt.where_clause.get()));
+    } else {
+      current_plan = std::make_unique<FilterPlan>(
+          CloneExpr(stmt.where_clause.get()),
+          std::move(current_plan));
+    }
   }
 
   // Check if aggregation is needed (either explicit GROUP BY or aggregate functions in select list)
