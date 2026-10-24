@@ -3,13 +3,16 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "catalog/catalog.h"
 #include "exec/execution_engine.h"
+#include "common/config.h"
 #include "optimizer/cost_model.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/join_order.h"
 #include "optimizer/selectivity.h"
 #include "parser/lexer.h"
@@ -295,6 +298,88 @@ void test_join_order_enumeration() {
   test_passed("join_order_enumeration");
 }
 
+void test_access_path_choice() {
+  const std::string table_path = kDir + "/choice.dat";
+  {
+    std::ofstream out(table_path, std::ios::binary);
+    const std::vector<char> page(sthir::kPageSize, '\0');
+    for (int i = 0; i < 41; ++i) out.write(page.data(), page.size());  // 41 pages
+  }
+
+  sthir::TableSchema schema;
+  schema.table_name = "Items";
+  schema.data_file_path = table_path;
+  schema.columns = {{"ItemID", sthir::DataType::INT, 4, false, false, false},
+                    {"RetailPrice", sthir::DataType::DECIMAL, 8, false, false, false}};
+  sthir::ColumnStats price;
+  price.column_name = "RetailPrice";
+  price.row_count = 5000;
+  price.ndv = 5000;
+  price.min_value = 1.0;
+  price.max_value = 51.0;
+  price.histogram = {{1.0, 17.666, 1667}, {17.666, 34.333, 1667}, {34.333, 51.0, 1666}};
+  price.valid = true;
+  schema.column_stats.push_back(price);
+  schema.indexes.push_back(sthir::IndexMetadata{"idx_price", "RetailPrice", 0, 3, 4});
+
+  // A single-row lookup: the index seek beats a 41-page sequential scan.
+  auto narrow = WhereExpr("RetailPrice = 25");
+  auto choice = sthir::ChooseAccessPath(schema, narrow.get());
+  CHECK(choice.name.find("IndexScan(idx_price)") != std::string::npos);
+  CHECK(choice.cost < 41.0);
+  CHECK_EQ(choice.rejected.size(), 1u);
+  CHECK(choice.rejected[0].name.find("SeqScan") != std::string::npos);
+
+  // A wide range covering the whole table: SeqScan wins and the index is listed.
+  auto wide = WhereExpr("RetailPrice > 1");
+  auto seq_choice = sthir::ChooseAccessPath(schema, wide.get());
+  CHECK_EQ(seq_choice.name, "SeqScan+Filter");
+  CHECK_EQ(seq_choice.rejected.size(), 1u);
+  CHECK(seq_choice.rejected[0].name.find("IndexScan") != std::string::npos);
+  CHECK(seq_choice.rejected[0].cost > seq_choice.cost);
+
+  // Measurement hooks: each path can be forced for the same predicate.
+  auto forced_seq = sthir::ChooseAccessPath(schema, narrow.get(), false, true);
+  CHECK_EQ(forced_seq.name, "SeqScan+Filter");
+  auto forced_index = sthir::ChooseAccessPath(schema, wide.get(), true, false);
+  CHECK(forced_index.name.find("IndexScan(idx_price)") != std::string::npos);
+  test_passed("access_path_choice");
+}
+
+void test_engine_reports_estimate_and_actual() {
+  fs::remove_all(kDir);
+  fs::create_directories(kDir);
+  Env env;
+  Run(env, "CREATE TABLE Items (ItemID INT, ItemName VARCHAR(50), RetailPrice DECIMAL)");
+  std::string sql = "INSERT INTO Items VALUES ";
+  for (int i = 1; i <= 100; ++i) {
+    if (i > 1) sql += ", ";
+    char price[16];
+    std::snprintf(price, sizeof(price), "%.2f", 0.5 * i);
+    sql += "(" + std::to_string(i) + ", 'item_" + std::to_string(i) + "', " + price + ")";
+  }
+  Run(env, sql);
+  Run(env, "ANALYZE Items");
+
+  auto res = Run(env, "SELECT * FROM Items WHERE RetailPrice > 25");
+  CHECK(res.has_plan_info);
+  CHECK_EQ(res.chosen_path, "SeqScan+Filter");  // tiny table: sequential wins
+  CHECK(res.estimated_cost > 0.0);
+  CHECK(res.rows_estimated > 1.0);
+  CHECK_EQ(res.rows_actual, res.rows.size());
+  CHECK(res.actual_time_ms >= 0.0);
+  CHECK(!res.plan_text.empty());
+  CHECK(res.alternatives.empty());  // no index exists: only one candidate
+
+  // With an index the rejected alternative is reported with its cost.
+  Run(env, "CREATE INDEX idx_price ON Items (RetailPrice)");
+  auto indexed = Run(env, "SELECT * FROM Items WHERE RetailPrice > 25");
+  CHECK_EQ(indexed.alternatives.size(), 1u);
+  CHECK(indexed.alternatives[0].name.find("IndexScan(idx_price)") != std::string::npos);
+  CHECK(indexed.alternatives[0].cost > indexed.estimated_cost);
+  test_passed("engine_reports_estimate_and_actual");
+}
+
 }  // namespace
 
 int main() {
@@ -307,6 +392,8 @@ int main() {
   test_selectivity_defaults_without_stats();
   test_cost_functions();
   test_join_order_enumeration();
+  test_access_path_choice();
+  test_engine_reports_estimate_and_actual();
   std::printf("all optimizer tests passed\n");
   return 0;
 }

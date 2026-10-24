@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
-#include <vector>
 #include <utility>
+#include <vector>
 
 #include "catalog/catalog.h"
 #include "index/index_scan.h"
@@ -24,18 +26,73 @@ enum class PlanNodeType {
   DELETE_NODE
 };
 
+// A candidate access path that was costed and rejected by the optimizer.
+struct PlanAlternative {
+  std::string name;
+  double cost = 0.0;
+  double rows = 0.0;
+};
+
 class PlanNode {
  public:
   virtual ~PlanNode() = default;
   virtual PlanNodeType type() const = 0;
   virtual const TableSchema& output_schema() const = 0;
   virtual std::vector<const PlanNode*> children() const = 0;
-  virtual std::string ToString(int indent = 0) const = 0;
+
+  // One-line label for EXPLAIN, e.g. "Filter" or "IndexScan(Items using ...)".
+  virtual std::string NodeLabel() const = 0;
+
+  // Indented tree with `[rows=..., cost=...]` on every node that was costed.
+  std::string ToString(int indent = 0) const {
+    std::string s = IndentStr(indent) + NodeLabel();
+    if (has_estimates_) {
+      s += "  [rows=" + FormatMetric(estimated_rows_) + ", cost=" + FormatMetric(estimated_cost_) + "]";
+    }
+    s += "\n";
+    for (const PlanNode* child : children()) {
+      if (child != nullptr) s += child->ToString(indent + 1);
+    }
+    return s;
+  }
+
+  // Phase 4 optimizer metadata.
+  void set_estimates(double rows, double cost) {
+    estimated_rows_ = rows;
+    estimated_cost_ = cost;
+    has_estimates_ = true;
+  }
+  double estimated_rows() const { return estimated_rows_; }
+  double estimated_cost() const { return estimated_cost_; }
+  bool has_estimates() const { return has_estimates_; }
+
+  // Access path chosen for this plan (e.g. "IndexScan(idx_price)+Filter") and
+  // the candidates it beat. Set on the root by the planner.
+  void set_access_path(std::string name) { access_path_ = std::move(name); }
+  const std::string& access_path() const { return access_path_; }
+  void set_alternatives(std::vector<PlanAlternative> alternatives) {
+    alternatives_ = std::move(alternatives);
+  }
+  const std::vector<PlanAlternative>& alternatives() const { return alternatives_; }
 
  protected:
-  static std::string IndentStr(int indent) {
-    return std::string(indent * 2, ' ');
+  static std::string IndentStr(int indent) { return std::string(indent * 2, ' '); }
+
+  static std::string FormatMetric(double value) {
+    char buf[32];
+    if (value >= 0.0 && value < 1e15 && value == static_cast<double>(static_cast<long long>(value))) {
+      std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(value));
+    } else {
+      std::snprintf(buf, sizeof(buf), "%.1f", value);
+    }
+    return buf;
   }
+
+  double estimated_rows_ = 0.0;
+  double estimated_cost_ = 0.0;
+  bool has_estimates_ = false;
+  std::string access_path_;
+  std::vector<PlanAlternative> alternatives_;
 };
 
 class SeqScanPlan : public PlanNode {
@@ -48,9 +105,7 @@ class SeqScanPlan : public PlanNode {
   const std::string& table_name() const { return table_name_; }
 
   std::vector<const PlanNode*> children() const override { return {}; }
-  std::string ToString(int indent = 0) const override {
-    return IndentStr(indent) + "SeqScan(" + table_name_ + ")\n";
-  }
+  std::string NodeLabel() const override { return "SeqScan(" + table_name_ + ")"; }
 
  private:
   std::string table_name_;
@@ -58,9 +113,8 @@ class SeqScanPlan : public PlanNode {
 };
 
 // Index access path: fetches the RIDs inside `range` from the B+tree described
-// by `index`, then rechecks `predicate` on every fetched tuple (the bounds are
-// widened, and stale/deleted RIDs must be ignored), so it is a drop-in
-// replacement for SeqScan + Filter.
+// by `index`. The predicate is kept for estimation and EXPLAIN only — the
+// Filter node above the scan owns result correctness.
 class IndexScanPlan : public PlanNode {
  public:
   IndexScanPlan(std::string table_name, TableSchema schema, IndexMetadata index,
@@ -82,12 +136,12 @@ class IndexScanPlan : public PlanNode {
   const Expr* predicate() const { return predicate_.get(); }
 
   std::vector<const PlanNode*> children() const override { return {}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "IndexScan(" + table_name_ + " using " +
-                    index_.index_name + " on " + index_.column_name + ", keys ";
+  std::string NodeLabel() const override {
+    std::string s = "IndexScan(" + table_name_ + " using " + index_.index_name + " on " +
+                    index_.column_name + ", keys ";
     s += range_.has_lo ? "[" + std::to_string(range_.lo) : "(-inf";
     s += range_.has_hi ? ", " + std::to_string(range_.hi) + "]" : ", +inf)";
-    return s + ")\n";
+    return s + ")";
   }
 
  private:
@@ -111,9 +165,7 @@ class FilterPlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    return IndentStr(indent) + "Filter\n" + child_->ToString(indent + 1);
-  }
+  std::string NodeLabel() const override { return "Filter"; }
 
  private:
   std::unique_ptr<Expr> predicate_;
@@ -135,15 +187,13 @@ class ProjectPlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "Project(";
+  std::string NodeLabel() const override {
+    std::string s = "Project(";
     for (size_t i = 0; i < projections_.size(); ++i) {
       s += projections_[i].second;
       if (i + 1 < projections_.size()) s += ", ";
     }
-    s += ")\n";
-    if (child_) s += child_->ToString(indent + 1);
-    return s;
+    return s + ")";
   }
 
  private:
@@ -178,15 +228,13 @@ class AggregatePlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "Aggregate(group_by=[";
+  std::string NodeLabel() const override {
+    std::string s = "Aggregate(group_by=[";
     for (size_t i = 0; i < group_by_cols_.size(); ++i) {
       s += group_by_cols_[i];
       if (i + 1 < group_by_cols_.size()) s += ", ";
     }
-    s += "])\n";
-    if (child_) s += child_->ToString(indent + 1);
-    return s;
+    return s + "])";
   }
 
  private:
@@ -208,15 +256,13 @@ class SortPlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "Sort(";
+  std::string NodeLabel() const override {
+    std::string s = "Sort(";
     for (size_t i = 0; i < order_by_items_.size(); ++i) {
       s += order_by_items_[i].column_name + (order_by_items_[i].is_desc ? " DESC" : " ASC");
       if (i + 1 < order_by_items_.size()) s += ", ";
     }
-    s += ")\n";
-    if (child_) s += child_->ToString(indent + 1);
-    return s;
+    return s + ")";
   }
 
  private:
@@ -244,12 +290,7 @@ class NestedLoopJoinPlan : public PlanNode {
   std::unique_ptr<PlanNode>& right() { return right_; }
 
   std::vector<const PlanNode*> children() const override { return {left_.get(), right_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "NestedLoopJoin\n";
-    if (left_) s += left_->ToString(indent + 1);
-    if (right_) s += right_->ToString(indent + 1);
-    return s;
-  }
+  std::string NodeLabel() const override { return "NestedLoopJoin"; }
 
  private:
   std::unique_ptr<Expr> join_predicate_;
@@ -278,9 +319,7 @@ class InsertPlan : public PlanNode {
   }
 
   std::vector<const PlanNode*> children() const override { return {}; }
-  std::string ToString(int indent = 0) const override {
-    return IndentStr(indent) + "InsertInto(" + table_name_ + ")\n";
-  }
+  std::string NodeLabel() const override { return "InsertInto(" + table_name_ + ")"; }
 
  private:
   std::string table_name_;
@@ -310,11 +349,7 @@ class UpdatePlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "Update(" + table_name_ + ")\n";
-    if (child_) s += child_->ToString(indent + 1);
-    return s;
-  }
+  std::string NodeLabel() const override { return "Update(" + table_name_ + ")"; }
 
  private:
   std::string table_name_;
@@ -325,12 +360,8 @@ class UpdatePlan : public PlanNode {
 
 class DeletePlan : public PlanNode {
  public:
-  DeletePlan(std::string table_name,
-             TableSchema schema,
-             std::unique_ptr<PlanNode> child)
-      : table_name_(std::move(table_name)),
-        schema_(std::move(schema)),
-        child_(std::move(child)) {}
+  DeletePlan(std::string table_name, TableSchema schema, std::unique_ptr<PlanNode> child)
+      : table_name_(std::move(table_name)), schema_(std::move(schema)), child_(std::move(child)) {}
 
   PlanNodeType type() const override { return PlanNodeType::DELETE_NODE; }
   const TableSchema& output_schema() const override { return schema_; }
@@ -339,11 +370,7 @@ class DeletePlan : public PlanNode {
   std::unique_ptr<PlanNode>& child() { return child_; }
 
   std::vector<const PlanNode*> children() const override { return {child_.get()}; }
-  std::string ToString(int indent = 0) const override {
-    std::string s = IndentStr(indent) + "Delete(" + table_name_ + ")\n";
-    if (child_) s += child_->ToString(indent + 1);
-    return s;
-  }
+  std::string NodeLabel() const override { return "Delete(" + table_name_ + ")"; }
 
  private:
   std::string table_name_;

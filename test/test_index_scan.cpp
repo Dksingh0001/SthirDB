@@ -16,7 +16,7 @@ namespace {
 const std::string kDir = "build/test_index_scan_env";
 const std::string kCatalogPath = kDir + "/catalog.json";
 const char* kQuery = "SELECT * FROM Items WHERE RetailPrice > 50";
-const size_t kRowsOver50 = 405;  // 400 rows at 0.25*i (i > 200) + 5 duplicate 60.00 rows
+const size_t kRowsOver50 = 9805;  // 9800 rows with 0.25*i > 50 + 5 duplicate 60.00 rows
 
 std::string Price(double value) {
   char buf[32];
@@ -55,10 +55,16 @@ void SortRows(std::vector<std::vector<std::string>>* rows) {
 
 void CreateAndFill(Env& env) {
   Run(env, "CREATE TABLE Items (ItemID INT, ItemName VARCHAR(50), RetailPrice DECIMAL)");
-  const int n = 600;
-  for (int i = 1; i <= n; ++i) {
-    Run(env, "INSERT INTO Items VALUES (" + std::to_string(i) + ", 'item_" + std::to_string(i) +
-                 "', " + Price(0.25 * i) + ")");
+  const int n = 10000;
+  const int batch = 1000;  // multi-row INSERT keeps the fixture quick
+  for (int start = 1; start <= n; start += batch) {
+    std::string sql = "INSERT INTO Items VALUES ";
+    for (int i = start; i < start + batch && i <= n; ++i) {
+      if (i > start) sql += ", ";
+      sql += "(" + std::to_string(i) + ", 'item_" + std::to_string(i) + "', " + Price(0.25 * i) +
+             ")";
+    }
+    Run(env, sql);
   }
   // Duplicate prices: the index must return every matching RID.
   for (int i = 0; i < 5; ++i) {
@@ -100,12 +106,20 @@ void test_index_equivalence() {
   CHECK(plan_before.rows[0][0].find("SeqScan") != std::string::npos);
 
   auto created = Run(env, "CREATE INDEX idx_price ON Items (RetailPrice)");
-  CHECK_EQ(created.rows_affected, 605u);
+  CHECK_EQ(created.rows_affected, 10005u);
 
+  // 96% of the table matches > 50, so the optimizer keeps SeqScan and lists the
+  // index as a rejected alternative with its cost.
   auto plan_after = Run(env, std::string("EXPLAIN ") + kQuery);
   CHECK_EQ(plan_after.rows.size(), 1u);
-  CHECK(plan_after.rows[0][0].find("IndexScan") != std::string::npos);
-  CHECK(plan_after.rows[0][0].find("idx_price") != std::string::npos);
+  CHECK(plan_after.rows[0][0].find("Chosen access path: SeqScan+Filter") != std::string::npos);
+  CHECK(plan_after.rows[0][0].find("Rejected alternatives") != std::string::npos);
+  CHECK(plan_after.rows[0][0].find("IndexScan(idx_price)") != std::string::npos);
+
+  // A single-row lookup is worth an index seek.
+  auto narrow_after = Run(env, "EXPLAIN SELECT * FROM Items WHERE RetailPrice = 25.50");
+  CHECK(narrow_after.rows[0][0].find("Chosen access path: IndexScan(idx_price)") !=
+        std::string::npos);
 
   // Same rows, same multiset: IndexScan must match SeqScan+Filter exactly.
   Snapshots after = TakeSnapshots(env);
@@ -151,7 +165,7 @@ void test_int_column_index_and_errors() {
   Env env;
   // Equality on an INT column uses its own index.
   auto created = Run(env, "CREATE INDEX idx_item_id ON Items (ItemID)");
-  CHECK_EQ(created.rows_affected, 605u);
+  CHECK_EQ(created.rows_affected, 10005u);
 
   auto plan = Run(env, "EXPLAIN SELECT * FROM Items WHERE ItemID = 42");
   CHECK(plan.rows[0][0].find("idx_item_id") != std::string::npos);

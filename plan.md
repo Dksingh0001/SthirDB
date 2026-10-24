@@ -244,14 +244,14 @@
 - [x] Range selectivity estimator (histogram-based) implemented.
 - [x] AND/OR selectivity combination implemented.
 - [x] Cost model functions implemented for SeqScan, IndexScan, Filter, Sort, Aggregate.
-- [ ] Access-path enumeration produces SeqScan and IndexScan candidates.
-- [ ] Plan comparison logic picks the minimum-cost candidate.
-- [ ] `ANALYZE <table>` CLI command refreshes and persists statistics.
+- [x] Access-path enumeration produces SeqScan and IndexScan candidates.
+- [x] Plan comparison logic picks the minimum-cost candidate.
+- [x] `ANALYZE <table>` CLI command refreshes and persists statistics.
 - [x] Join-order enumeration (all 6 orders for 3 tables) implemented as the documented stretch item.
-- [ ] `EXPLAIN "<sql>"` CLI command prints the chosen plan tree + rejected alternatives.
-- [ ] Executor reports `actual_time_ms` and `rows_actual` back to the CLI output.
-- [ ] Estimation-error reporting (`rows_estimated` vs `rows_actual`) implemented.
-- [ ] `optimizer "<sql>"` CLI command prints chosen plan, estimated cost, actual time.
+- [x] `EXPLAIN "<sql>"` CLI command prints the chosen plan tree + rejected alternatives.
+- [x] Executor reports `actual_time_ms` and `rows_actual` back to the CLI output.
+- [x] Estimation-error reporting (`rows_estimated` vs `rows_actual`) implemented.
+- [x] `optimizer "<sql>"` CLI command prints chosen plan, estimated cost, actual time.
 - [ ] **Verify (Experiment 2 evidence):** run a query where SeqScan wins and one where IndexScan wins; both choices must match the faster observed runtime.
 - [ ] **Verify:** at least one query is documented where the estimate is badly wrong — this becomes honest "limitations" material for the report.
 - [ ] **Report contribution (single report, §5):** cost equations, cardinality assumptions, one SeqScan-wins and one IndexScan-wins `EXPLAIN` example, and the estimated-vs-actual table written into `docs/report.md` §5; raw outputs in `docs/evidence/`.

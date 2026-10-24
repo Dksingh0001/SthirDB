@@ -1,5 +1,6 @@
 #include "exec/execution_engine.h"
 
+#include <chrono>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -22,6 +23,12 @@ namespace {
 std::string ToLower(std::string s) {
   for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return s;
+}
+
+std::string FormatCost(double value) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.1f", value);
+  return buf;
 }
 
 }  // namespace
@@ -162,10 +169,9 @@ std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* pla
       auto tree = std::make_unique<BPlusTree>(index->dm.get(), index->bp.get(),
                                               idx_scan->index().root_page_id,
                                               idx_scan->index().height);
-      auto pred = idx_scan->predicate() ? idx_scan->predicate()->Clone() : nullptr;
       return std::make_unique<IndexScanExecutor>(
           idx_scan->table_name(), idx_scan->output_schema(), table->bp.get(), table->dm.get(),
-          std::move(tree), idx_scan->key_column(), idx_scan->range(), std::move(pred));
+          std::move(tree), idx_scan->range());
     }
     case PlanNodeType::FILTER: {
       const auto* f = static_cast<const FilterPlan*>(plan);
@@ -396,7 +402,8 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
   // 4. EXPLAIN
   if (stmt->type() == StmtType::EXPLAIN) {
     auto* exp = static_cast<ExplainStmt*>(stmt.get());
-    Planner planner(*catalog_);
+    Planner planner(*catalog_, GetSessionFlag("enable_index_scan") != "off",
+                    GetSessionFlag("enable_seq_scan") != "off");
     std::string err;
     auto plan = planner.CreatePlan(*exp->stmt(), &err);
     if (!plan) {
@@ -404,15 +411,35 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
       res.error_message = err;
       return res;
     }
+    std::string text;
+    if (!plan->access_path().empty()) {
+      text += "Chosen access path: " + plan->access_path() + "\n";
+    }
+    text += plan->ToString();
+    if (!plan->alternatives().empty()) {
+      text += "Rejected alternatives:\n";
+      for (const auto& alternative : plan->alternatives()) {
+        text += "  " + alternative.name + "  cost=" + FormatCost(alternative.cost) +
+                "  rows=" + FormatCost(alternative.rows) + "\n";
+      }
+    }
+
     res.success = true;
     res.is_query = true;
     res.column_names = {"QUERY PLAN"};
-    res.rows.push_back({plan->ToString()});
+    res.rows.push_back({text});
+    res.chosen_path = plan->access_path();
+    res.estimated_cost = plan->estimated_cost();
+    res.rows_estimated = plan->estimated_rows();
+    res.alternatives = plan->alternatives();
+    res.plan_text = plan->ToString();
+    res.has_plan_info = true;
     return res;
   }
 
   // 5. DML & Queries via Planner
-  Planner planner(*catalog_);
+  Planner planner(*catalog_, GetSessionFlag("enable_index_scan") != "off",
+                  GetSessionFlag("enable_seq_scan") != "off");
   std::string plan_err;
   auto plan = planner.CreatePlan(*stmt, &plan_err);
   if (!plan) {
@@ -479,6 +506,7 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     return res;
   }
 
+  const auto start_time = std::chrono::steady_clock::now();
   exec->init();
   res.success = true;
   res.is_query = true;
@@ -497,6 +525,17 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     res.rows.push_back(std::move(row_strings));
   }
   exec->close();
+
+  const auto end_time = std::chrono::steady_clock::now();
+  res.actual_time_ms =
+      std::chrono::duration<double, std::milli>(end_time - start_time).count();
+  res.rows_actual = res.rows.size();
+  res.chosen_path = plan->access_path();
+  res.estimated_cost = plan->estimated_cost();
+  res.rows_estimated = plan->estimated_rows();
+  res.alternatives = plan->alternatives();
+  res.plan_text = plan->ToString();
+  res.has_plan_info = true;
 
   return res;
 }

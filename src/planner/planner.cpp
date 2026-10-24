@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "index/index_scan.h"
+#include "optimizer/optimizer.h"
 
 namespace sthir {
 
@@ -148,25 +149,6 @@ bool ValidateExprColumns(const Expr* expr, const TableSchema& schema, std::strin
   return true;
 }
 
-// Phase 3 access-path rule: use an existing index whenever the WHERE clause
-// yields key bounds on the indexed column. Deliberately unconditional — Phase 4
-// replaces this with the cost-based choice between SeqScan and IndexScan.
-const IndexMetadata* FindUsableIndex(const TableSchema& schema, const Expr* where,
-                                     size_t* key_column, KeyRange* range) {
-  if (!where) return nullptr;
-  for (const auto& index : schema.indexes) {
-    const int col = schema.FindColumnIndex(index.column_name);
-    if (col < 0) continue;
-    KeyRange candidate;
-    if (!ExtractKeyRange(where, schema, static_cast<size_t>(col), &candidate)) continue;
-    if (candidate.IsEmpty()) continue;
-    *key_column = static_cast<size_t>(col);
-    *range = candidate;
-    return &index;
-  }
-  return nullptr;
-}
-
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::CreatePlan(const SQLStatement& stmt, std::string* err) {
@@ -195,6 +177,8 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
   std::unique_ptr<PlanNode> current_plan =
       std::make_unique<SeqScanPlan>(from_schema->table_name, *from_schema);
   TableSchema current_schema = *from_schema;
+  std::vector<PlanAlternative> rejected_paths;
+  std::string chosen_path = "SeqScan";
 
   // Handle JOIN
   if (stmt.has_join) {
@@ -244,24 +228,23 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
     }
   }
 
-  // Handle WHERE
+  // Handle WHERE: validate, then let the optimizer pick the access path.
   if (stmt.where_clause) {
     if (!ValidateExprColumns(stmt.where_clause.get(), current_schema, err)) {
       return nullptr;
     }
-    size_t key_column = 0;
-    KeyRange range;
-    const IndexMetadata* index =
-        stmt.has_join ? nullptr
-                      : FindUsableIndex(*from_schema, stmt.where_clause.get(), &key_column, &range);
-    if (index != nullptr) {
-      current_plan = std::make_unique<IndexScanPlan>(from_schema->table_name, *from_schema,
-                                                     *index, key_column, range,
-                                                     CloneExpr(stmt.where_clause.get()));
-    } else {
+    if (stmt.has_join) {
+      // The join's output schema only exists after the join, so the filter
+      // stays above it; access-path choice is single-table only in Phase 4.
       current_plan = std::make_unique<FilterPlan>(
           CloneExpr(stmt.where_clause.get()),
           std::move(current_plan));
+    } else {
+      AccessPathChoice choice = ChooseAccessPath(*from_schema, stmt.where_clause.get(),
+                                                     allow_index_scan_, allow_seq_scan_);
+      current_plan = std::move(choice.plan);
+      chosen_path = choice.name;
+      rejected_paths = choice.rejected;
     }
   }
 
@@ -344,6 +327,11 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
         std::move(current_plan));
   }
 
+  // Phase 4: cost every node and record the access-path decision on the root
+  // so EXPLAIN can print the chosen plan next to the rejected candidates.
+  AnnotatePlan(current_plan.get());
+  current_plan->set_access_path(chosen_path);
+  current_plan->set_alternatives(std::move(rejected_paths));
   return current_plan;
 }
 
@@ -414,6 +402,7 @@ std::unique_ptr<PlanNode> Planner::PlanUpdate(const UpdateStmt& stmt, std::strin
     cloned_assignments.push_back({a.first, CloneExpr(a.second.get())});
   }
 
+  AnnotatePlan(scan.get());
   return std::make_unique<UpdatePlan>(stmt.table_name, *schema, std::move(cloned_assignments), std::move(scan));
 }
 
@@ -429,6 +418,7 @@ std::unique_ptr<PlanNode> Planner::PlanDelete(const DeleteStmt& stmt, std::strin
     scan = std::make_unique<FilterPlan>(CloneExpr(stmt.where_clause.get()), std::move(scan));
   }
 
+  AnnotatePlan(scan.get());
   return std::make_unique<DeletePlan>(stmt.table_name, *schema, std::move(scan));
 }
 

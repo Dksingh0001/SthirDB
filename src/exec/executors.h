@@ -44,9 +44,10 @@ class SeqScanExecutor : public Executor {
   uint32_t total_pages_ = 0;
 };
 
-// Reads RIDs from a B+tree range scan, fetches each base tuple by RID, drops
-// RIDs whose slot was deleted after the index was built, and rechecks the
-// predicate so index bounds only have to be a superset of the true matches.
+// Reads RIDs from a B+tree range scan and fetches each base tuple by RID,
+// dropping RIDs whose slot was deleted after the index was built. The Filter
+// node above owns predicate semantics; index bounds only have to be a superset
+// of the true matches.
 class IndexScanExecutor : public Executor {
  public:
   IndexScanExecutor(std::string table_name,
@@ -54,9 +55,7 @@ class IndexScanExecutor : public Executor {
                     BufferPool* bp,
                     DiskManager* dm,
                     std::unique_ptr<BPlusTree> tree,
-                    size_t key_column,
-                    KeyRange range,
-                    std::unique_ptr<Expr> predicate);
+                    KeyRange range);
 
   void init() override;
   std::optional<Tuple> next() override;
@@ -72,9 +71,7 @@ class IndexScanExecutor : public Executor {
   BufferPool* bp_;
   DiskManager* dm_;
   std::unique_ptr<BPlusTree> tree_;
-  size_t key_column_;
   KeyRange range_;
-  std::unique_ptr<Expr> predicate_;
 
   std::vector<IndexRid> rids_;
   size_t rid_idx_ = 0;

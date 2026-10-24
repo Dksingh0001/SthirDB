@@ -83,17 +83,13 @@ IndexScanExecutor::IndexScanExecutor(std::string table_name,
                                      BufferPool* bp,
                                      DiskManager* dm,
                                      std::unique_ptr<BPlusTree> tree,
-                                     size_t key_column,
-                                     KeyRange range,
-                                     std::unique_ptr<Expr> predicate)
+                                     KeyRange range)
     : table_name_(std::move(table_name)),
       schema_(std::move(schema)),
       bp_(bp),
       dm_(dm),
       tree_(std::move(tree)),
-      key_column_(key_column),
-      range_(range),
-      predicate_(std::move(predicate)) {}
+      range_(range) {}
 
 void IndexScanExecutor::init() {
   rids_.clear();
@@ -129,9 +125,6 @@ std::optional<Tuple> IndexScanExecutor::next() {
     if (tuple.is_deleted()) continue;
 
     tuple.set_rid(RID{rid.page_id, rid.slot_id, true});
-    if (predicate_ && EvaluatePredicate(predicate_.get(), tuple, schema_) != Tribool::True) {
-      continue;
-    }
     return tuple;
   }
   return std::nullopt;

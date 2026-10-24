@@ -23,6 +23,16 @@ struct ExecutionResult {
   size_t rows_affected = 0;
   bool is_query = false;
 
+  // Phase 4 optimizer reporting (filled for SELECT and EXPLAIN).
+  std::string chosen_path;                       // e.g. "IndexScan(idx_price)+Filter"
+  double estimated_cost = 0.0;
+  double rows_estimated = 0.0;
+  size_t rows_actual = 0;
+  double actual_time_ms = 0.0;
+  std::vector<PlanAlternative> alternatives;     // rejected candidates, with costs
+  std::string plan_text;                         // indented plan tree with estimates
+  bool has_plan_info = false;
+
   void PrintTable(std::ostream& os = std::cout) const;
 };
 

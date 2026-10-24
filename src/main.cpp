@@ -25,6 +25,10 @@ void PrintUsage() {
       "  sthirdb                     Print this help and exit (status 0).\n"
       "  sthirdb --version           Print version and exit.\n"
       "  sthirdb run \"<sql>\"         Execute a SQL query, DDL, or DML statement.\n"
+      "  sthirdb explain \"<sql>\"     Plan tree with estimated rows/cost + rejected paths.\n"
+      "  sthirdb optimizer \"<sql>\"   Chosen plan, estimated cost/rows and actual time.\n"
+      "                             --seq / --index force one access path (measurement).\n"
+      "  sthirdb analyze <table>     Refresh and persist column statistics.\n"
       "  sthirdb init_schema         Create ./data/retail and the Items table file.\n"
       "  sthirdb load_data --rows N  Bulk-insert N rows into Items.\n"
       "  sthirdb count               Count live rows in Items.\n",
@@ -154,7 +158,7 @@ int CmdCount() {
   return 0;
 }
 
-int CmdRun(const std::string& sql) {
+int RunSql(const std::string& sql) {
   sthir::Catalog catalog(sthir::kCatalogPath);
   std::string err;
   if (!catalog.Load(&err)) {
@@ -165,6 +169,75 @@ int CmdRun(const std::string& sql) {
   auto res = engine.Execute(sql);
   res.PrintTable(std::cout);
   return res.success ? 0 : 1;
+}
+
+int CmdRun(const std::string& sql) { return RunSql(sql); }
+
+// EXPLAIN "<sql>": plan tree, predicted rows/cost per node, rejected candidates.
+int CmdExplain(const std::string& sql) {
+  if (sql.size() >= 7 && sql.compare(0, 7, "EXPLAIN") == 0) return RunSql(sql);
+  return RunSql("EXPLAIN " + sql);
+}
+
+// ANALYZE <table>: refresh and persist column statistics.
+int CmdAnalyze(const std::string& table) {
+  if (table.empty()) {
+    std::fprintf(stderr, "analyze: expected 'sthirdb analyze <table>'\n");
+    return 2;
+  }
+  return RunSql("ANALYZE " + table);
+}
+
+// optimizer "<sql>": chosen plan, estimated cost/rows, actual time and rows.
+int CmdOptimizer(const std::string& sql, bool force_seq = false, bool force_index = false) {
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "optimizer: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  // Measurement hooks: run the same query on a forced path to compare runtimes.
+  if (force_seq) engine.SetSessionFlag("enable_index_scan", "off");
+  if (force_index) engine.SetSessionFlag("enable_seq_scan", "off");
+  auto res = engine.Execute(sql);
+  if (!res.success) {
+    res.PrintTable(std::cout);
+    return 1;
+  }
+  if (!res.has_plan_info) {
+    std::fprintf(stderr, "optimizer: statement produced no plan\n");
+    return 1;
+  }
+
+  std::printf("Chosen plan (%s):\n%s\n", res.chosen_path.c_str(), res.plan_text.c_str());
+
+  sthir::ExecutionResult summary;
+  summary.is_query = true;
+  summary.column_names = {"METRIC", "VALUE"};
+  auto add = [&summary](const std::string& metric, const std::string& value) {
+    summary.rows.push_back({metric, value});
+  };
+  char buf[64];
+  add("chosen_path", res.chosen_path);
+  std::snprintf(buf, sizeof(buf), "%.1f", res.estimated_cost);
+  add("estimated_cost", buf);
+  std::snprintf(buf, sizeof(buf), "%.0f", res.rows_estimated);
+  add("rows_estimated", buf);
+  std::snprintf(buf, sizeof(buf), "%.3f", res.actual_time_ms);
+  add("actual_time_ms", buf);
+  add("rows_actual", std::to_string(res.rows_actual));
+  for (const auto& alternative : res.alternatives) {
+    std::snprintf(buf, sizeof(buf), "cost=%.1f rows=%.0f", alternative.cost, alternative.rows);
+    add("rejected " + alternative.name, buf);
+  }
+  if (res.rows_estimated > 0.0) {
+    std::snprintf(buf, sizeof(buf), "%.2fx",
+                  static_cast<double>(res.rows_actual) / res.rows_estimated);
+    add("estimation_error", buf);
+  }
+  summary.PrintTable(std::cout);
+  return 0;
 }
 
 bool ParseRowsArg(int argc, char** argv, size_t* out_rows) {
@@ -196,6 +269,31 @@ int main(int argc, char** argv) {
       return 2;
     }
     return CmdRun(argv[2]);
+  }
+  if (cmd == "explain") {
+    if (argc != 3) {
+      std::fprintf(stderr, "explain: expected 'sthirdb explain \"<sql>\"'\n");
+      return 2;
+    }
+    return CmdExplain(argv[2]);
+  }
+  if (cmd == "optimizer") {
+    if (argc == 3) return CmdOptimizer(argv[2]);
+    if (argc == 4) {
+      const std::string flag = argv[2];
+      if (flag == "--seq") return CmdOptimizer(argv[3], true, false);
+      if (flag == "--index") return CmdOptimizer(argv[3], false, true);
+    }
+    std::fprintf(stderr,
+                 "optimizer: expected 'sthirdb optimizer [--seq|--index] \"<sql>\"'\n");
+    return 2;
+  }
+  if (cmd == "analyze") {
+    if (argc != 3) {
+      std::fprintf(stderr, "analyze: expected 'sthirdb analyze <table>'\n");
+      return 2;
+    }
+    return CmdAnalyze(argv[2]);
   }
   if (cmd == "init_schema") {
     if (argc != 2) {
