@@ -76,6 +76,7 @@ void AnnotateRec(PlanNode* node) {
       const double rows =
           static_cast<double>(EstimateRows(selectivity, static_cast<uint64_t>(summary.rows)));
       node->set_estimates(rows, IndexScanCost(static_cast<double>(scan->index().height), rows,
+                                              summary.rows,
                                               static_cast<double>(summary.pages)));
       break;
     }
@@ -210,7 +211,7 @@ AccessPathChoice ChooseAccessPath(const TableSchema& schema, const Expr* where,
       scan->set_estimates(range_rows, 0.0);
       index_plan = std::make_unique<FilterPlan>(where->Clone(), std::move(scan));
       index_name = "IndexScan(" + index.index_name + ")+Filter";
-      index_cost = IndexScanCost(static_cast<double>(index.height), range_rows,
+      index_cost = IndexScanCost(static_cast<double>(index.height), range_rows, table.rows,
                                  static_cast<double>(table.pages));
       index_output_rows = output_rows;
       break;

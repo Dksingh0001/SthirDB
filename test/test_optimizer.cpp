@@ -261,11 +261,15 @@ void test_selectivity_defaults_without_stats() {
 
 void test_cost_functions() {
   CHECK(Near(sthir::SeqScanCost(41), 41.0));
-  // index_height(3) + 4 matching rows -> 4 random page reads.
-  CHECK(Near(sthir::IndexScanCost(3, 4, 41), 3.0 + 4.0 * sthir::kRandPageCost));
-  // A wide match cannot touch more pages than the table has.
-  CHECK(Near(sthir::IndexScanCost(3, 1000, 41), 3.0 + 41.0 * sthir::kRandPageCost));
-  CHECK(Near(sthir::RandomFetchPages(10, 41), 10.0));
+  // index_height(3) + matching rows packed at average density: 4 rows of a
+  // 5000-row/41-page table ceil to one page of matches.
+  CHECK(Near(sthir::PagesOfMatchingRows(4, 5000, 41), 1.0));
+  CHECK(Near(sthir::IndexScanCost(3, 4, 5000, 41), 3.0 + 1.0 * sthir::kRandPageCost));
+  // Half the table matches: 2500 * 41 / 5000 = 20.5 -> 21 pages.
+  CHECK(Near(sthir::PagesOfMatchingRows(2500, 5000, 41), 21.0));
+  // A full-table match cannot touch more pages than the table has.
+  CHECK(Near(sthir::PagesOfMatchingRows(5000, 5000, 41), 41.0));
+  CHECK(Near(sthir::IndexScanCost(3, 5000, 5000, 41), 3.0 + 41.0 * sthir::kRandPageCost));
   CHECK(Near(sthir::FilterCost(41.0, 1000), 41.0));
   CHECK(Near(sthir::AggregateCost(41.0, 1000), 41.0));
   CHECK(Near(sthir::SortCost(10, 63), 0.0));  // fits in the buffer pool

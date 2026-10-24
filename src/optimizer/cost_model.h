@@ -10,13 +10,19 @@ inline constexpr double kRandPageCost = 4.0;
 // seq_scan_cost = pages(table), read sequentially.
 double SeqScanCost(double table_pages);
 
-// Pages touched when fetching `rows` base tuples by RID: each matching row may
-// land on a different page, bounded by the table size.
-double RandomFetchPages(double rows, double table_pages);
+// Pages of the base table that hold `matching_rows` rows, packed at the
+// table's average fill density: ceil(rows * pages / row_count), clamped to
+// [1, table_pages] for a non-empty match. This assumes matching rows are
+// physically co-located (true for the append-ordered load used here); for
+// scattered data the true count approaches min(rows, table_pages).
+// Stated as an assumption in docs/report.md §5.
+double PagesOfMatchingRows(double matching_rows, double table_rows, double table_pages);
 
-// index_scan_cost = index_height + pages_of_matching_rows, priced as a
-// sequential walk down the tree plus random table fetches.
-double IndexScanCost(double index_height, double matching_rows, double table_pages);
+// index_scan_cost = index_height + pages_of_matching_rows: the descent is
+// priced as a sequential walk over a few buffer-resident pages, the matching
+// table pages as random RID fetches (rand_page_cost each).
+double IndexScanCost(double index_height, double matching_rows, double table_rows,
+                     double table_pages);
 
 // Predicate evaluation is CPU only; the model counts page I/O, so a filter adds
 // nothing on top of its child.

@@ -1,6 +1,7 @@
 #include "optimizer/cost_model.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "common/config.h"
 
@@ -11,15 +12,18 @@ double SeqScanCost(double table_pages) {
   return table_pages * kSeqPageCost;
 }
 
-double RandomFetchPages(double rows, double table_pages) {
-  if (rows <= 0.0) return 0.0;
-  if (table_pages <= 0.0) return rows;
-  return std::min(rows, table_pages);
+double PagesOfMatchingRows(double matching_rows, double table_rows, double table_pages) {
+  if (matching_rows <= 0.0 || table_pages <= 0.0) return 0.0;
+  if (table_rows <= 0.0) return std::min(matching_rows, table_pages);  // unknown table size
+  const double pages = std::ceil(matching_rows * table_pages / table_rows);
+  return std::min(pages, table_pages);
 }
 
-double IndexScanCost(double index_height, double matching_rows, double table_pages) {
+double IndexScanCost(double index_height, double matching_rows, double table_rows,
+                     double table_pages) {
   const double tree_pages = index_height > 0.0 ? index_height : 0.0;
-  return tree_pages * kSeqPageCost + RandomFetchPages(matching_rows, table_pages) * kRandPageCost;
+  return tree_pages * kSeqPageCost +
+         PagesOfMatchingRows(matching_rows, table_rows, table_pages) * kRandPageCost;
 }
 
 double FilterCost(double child_cost, double input_rows) {
