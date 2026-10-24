@@ -240,14 +240,14 @@
 ### Checklist
 - [x] Column statistics (row_count, NDV, min, max) computed and persisted at index-build time.
 - [x] 3-bucket histogram structure built and persisted per indexed column.
-- [ ] Equality selectivity estimator implemented.
-- [ ] Range selectivity estimator (histogram-based) implemented.
-- [ ] AND/OR selectivity combination implemented.
-- [ ] Cost model functions implemented for SeqScan, IndexScan, Filter, Sort, Aggregate.
+- [x] Equality selectivity estimator implemented.
+- [x] Range selectivity estimator (histogram-based) implemented.
+- [x] AND/OR selectivity combination implemented.
+- [x] Cost model functions implemented for SeqScan, IndexScan, Filter, Sort, Aggregate.
 - [ ] Access-path enumeration produces SeqScan and IndexScan candidates.
 - [ ] Plan comparison logic picks the minimum-cost candidate.
 - [ ] `ANALYZE <table>` CLI command refreshes and persists statistics.
-- [ ] Join-order enumeration (all 6 orders for 3 tables) implemented as the documented stretch item.
+- [x] Join-order enumeration (all 6 orders for 3 tables) implemented as the documented stretch item.
 - [ ] `EXPLAIN "<sql>"` CLI command prints the chosen plan tree + rejected alternatives.
 - [ ] Executor reports `actual_time_ms` and `rows_actual` back to the CLI output.
 - [ ] Estimation-error reporting (`rows_estimated` vs `rows_actual`) implemented.
