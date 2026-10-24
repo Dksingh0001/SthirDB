@@ -51,7 +51,9 @@ class BPlusNode {
   void set_page_lsn(uint64_t lsn) { page_lsn_ = lsn; }
   bool is_leaf() const { return is_leaf_; }
   uint16_t key_count() const { return static_cast<uint16_t>(keys_.size()); }
+  // A node is at capacity with kIndexMaxKeys keys; one more needs a split.
   bool is_full() const { return keys_.size() >= kIndexMaxKeys; }
+  bool is_overfull() const { return keys_.size() > kIndexMaxKeys; }
 
   int64_t key(uint16_t i) const { return keys_[i]; }
   const std::vector<int64_t>& keys() const { return keys_; }
@@ -69,6 +71,8 @@ class BPlusNode {
   // Internal accessors: children_.size() == keys_.size() + 1.
   uint32_t child(uint16_t i) const { return children_[i]; }
   const std::vector<uint32_t>& children() const { return children_; }
+  // Overwrites child[i]; used when growing a fresh root around an old root.
+  void set_child(uint16_t i, uint32_t pid) { children_[i] = pid; }
 
   // First index i with keys_[i] >= key (keys are sorted, duplicates allowed).
   uint16_t LowerBound(int64_t key) const;
@@ -80,7 +84,8 @@ class BPlusNode {
   // Internal entry insert: key at `pos`, `right_child` becomes child[pos+1].
   void InternalInsert(uint16_t pos, int64_t key, uint32_t right_child);
 
-  // Splits a full node. On entry this node holds kIndexMaxKeys + 1 entries;
+  // Splits an overflowing node. On entry this node holds kIndexMaxKeys + 1
+  // entries (see is_overfull());
   // on return the left half stays here and `right` receives the right half.
   // `*separator` is the key promoted to the parent: for a leaf it is the
   // first key of the right node (copy up); for an internal node it is the

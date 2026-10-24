@@ -199,12 +199,12 @@
 ### Checklist
 - [x] B+tree node page format (leaf + internal) implemented with serialize/deserialize.
 - [ ] Tree metadata (root page id, height, order) persisted in the catalog.
-- [ ] `insert(key, rid)` implemented with correct leaf insertion.
-- [ ] Leaf split + parent update implemented, including internal-node split.
-- [ ] Root split and height growth implemented.
-- [ ] `lookup(key) -> RID[]` implemented (handles duplicate keys).
-- [ ] `range_scan(lo, hi) -> RID[]` implemented via leaf links.
-- [ ] All node accesses routed through the buffer pool with correct pin/unpin.
+- [x] `insert(key, rid)` implemented with correct leaf insertion.
+- [x] Leaf split + parent update implemented, including internal-node split.
+- [x] Root split and height growth implemented.
+- [x] `lookup(key) -> RID[]` implemented (handles duplicate keys).
+- [x] `range_scan(lo, hi) -> RID[]` implemented via leaf links.
+- [x] All node accesses routed through the buffer pool with correct pin/unpin.
 - [ ] `CREATE INDEX idx ON t (col)` DDL parsed and executed (build by scanning the table).
 - [ ] `IndexScan` RA node + executor implemented.
 - [ ] Unit test: insert 10,000 ascending keys and verify lookups + range scans.
