@@ -1,0 +1,108 @@
+== Phase 3 unit tests (B+tree node, tree, index scan) ==
+$ ./build/test_btree_node
+PASS leaf roundtrip
+PASS internal roundtrip
+PASS sorted bounds
+PASS leaf split
+PASS internal split
+PASS test_btree_node
+
+$ ./build/test_bplus_tree
+PASS empty tree
+PASS ascending insert + lookup
+PASS duplicate keys
+INFO 5000 duplicate keys: height=9 leaves=2498 pages=4662 insert_ms=70.0
+PASS duplicate run spanning leaves
+INFO 10000 ascending keys: height=9 leaves=5000 pages=7501 insert_ms=51.6
+PASS 10000 ascending keys
+INFO 10000 random keys: height=9 leaves=4270 pages=6452 insert_ms=123.4
+PASS 10000 random keys
+all bplus_tree tests passed
+
+$ ./build/test_index_scan
+PASS index scan matches seq scan + filter
+PASS index metadata survives restart
+PASS int column index and error cases
+all index scan tests passed
+
+== Full suite: make test ==
+== build/test_bplus_tree
+PASS empty tree
+PASS ascending insert + lookup
+PASS duplicate keys
+INFO 5000 duplicate keys: height=9 leaves=2498 pages=4662 insert_ms=57.5
+PASS duplicate run spanning leaves
+INFO 10000 ascending keys: height=9 leaves=5000 pages=7501 insert_ms=45.9
+PASS 10000 ascending keys
+INFO 10000 random keys: height=9 leaves=4270 pages=6452 insert_ms=95.5
+PASS 10000 random keys
+all bplus_tree tests passed
+== build/test_btree_node
+PASS leaf roundtrip
+PASS internal roundtrip
+PASS sorted bounds
+PASS leaf split
+PASS internal split
+PASS test_btree_node
+== build/test_buffer_pool
+PASS replacer_lru_contract
+PASS buffer_pool_pin_protocol
+PASS buffer_pool_exhaustion
+PASS buffer_pool_dirty_writeback
+PASS buffer_pool_dirty_marking
+PASS buffer_pool_flush_all
+== build/test_catalog
+PASS catalog_create_and_lookup
+PASS catalog_validation_errors
+PASS catalog_persistence_across_restart
+PASS catalog_index_metadata_roundtrip
+== build/test_disk_manager
+PASS disk_allocate
+PASS disk_write_read_roundtrip
+PASS disk_offset_addressing
+PASS disk_reopen_persists
+PASS disk_read_beyond_eof
+== build/test_exec
+PASS 3vl_logic
+PASS tuple_serialization_roundtrip
+PASS filter_and_project_executors
+PASS aggregate_executor
+PASS sort_executor
+PASS nested_loop_join_executor
+== build/test_index_scan
+PASS index scan matches seq scan + filter
+PASS index metadata survives restart
+PASS int column index and error cases
+all index scan tests passed
+== build/test_page
+PASS page_header_layout
+PASS page_insert_read_delete
+PASS page_fill_until_full
+PASS page_tombstone_compact
+== build/test_parser
+PASS parse_create_table
+PASS parse_create_table_with_constraints
+PASS parse_create_index
+PASS parse_insert
+PASS parse_select
+PASS parse_select_aggregates_group_order_join
+PASS parse_update_delete
+PASS parse_transactions_and_utils
+PASS parse_precedence_and_parentheses
+PASS parse_errors
+== build/test_row
+PASS row_round_trip
+PASS row_fixed_name_field
+PASS row_deleted_flag
+PASS row_in_page
+== build/test_sql_integration
+PASS acceptance_examples
+PASS joins_aggregates_and_nulls
+PASS persistence_across_restart
+PASS transactions_and_utils
+PASS error_handling
+== build/test_stress
+stress[stress_64_frames]: frames=64 rows=5000 pages=41 write_ms=0.93 read_ms=0.30 verified=5000 mismatches=0
+PASS stress_64_frames
+stress[stress_8_frames_forced_eviction]: frames=8 rows=5000 pages=41 write_ms=0.76 read_ms=0.25 verified=5000 mismatches=0
+PASS stress_8_frames_forced_eviction

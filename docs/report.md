@@ -147,7 +147,7 @@ SELECT ItemName FROM Items WHERE RetailPrice > 5;
 
 ## 4. Storage, Indexing & Query Execution
 
-_Drafted in Phases 1–3. This section holds the Phase 1 first draft (page format and buffer pool); the B+tree and SQL execution layers arrive in Phases 2–3._
+_Drafted in Phases 1–3. Subsections 4.1–4.4 cover the Phase 1 page format and buffer pool; 4.5–4.7 cover the Phase 3 B+tree index and its verification. The SQL execution layer is described in §3.2 and its acceptance evidence lives in `docs/evidence/phase2_*.txt`._
 
 ### 4.1 Page format
 
@@ -211,6 +211,79 @@ The end-to-end CLI check (`init_schema`, `load_data --rows 5000`, `count`) exits
 > - The buffer pool holds 64 pinned-or-not frames, evicts only unpinned frames (LRU), and writes dirty pages back first.
 > - Every disk write goes through one function with a crash hook, so crash tests later need no call-site changes.
 > - The 5,000-row stress test passed with both a 64-frame and an 8-frame pool.
+
+### 4.5 B+tree node format
+
+The index is a disk-resident B+tree stored in its own file (`items.idx_price.idx` lives beside `items.dat`), so index pages are paged through their own buffer pool and never displace table pages. Every node is one 8 KB page with a 16-byte header shared by both node kinds.
+
+**Figure 1.** Node layout inside one 8 KB index page.
+
+```
+leaf page
++----------+-------------------+----------------------+---------------------------+
+| header   | next_leaf_page_id | keys[0..n)  int64    | rids[0..n)  6 B each      |
+| 16 B     | 4 B               | 8 B each, sorted     | uint32 page_id + uint16 slot |
++----------+-------------------+----------------------+---------------------------+
+  ^ page_id(4) page_lsn(8) is_leaf(1) reserved(1) key_count(2)
+
+internal page
++----------+----------------------+----------------------------+
+| header   | keys[0..n)  int64    | children[0..n]  uint32     |
+| 16 B     | separator keys       | n+1 child page ids         |
++----------+----------------------+----------------------------+
+```
+
+- `page_lsn` is carried in every index page header for the same reason as in table pages: Phase 5 redo will skip already-applied page changes.
+- Leaf `rid` entries are 6 bytes (`uint32 page_id`, `uint16 slot_id`) and point at a tuple slot in the table file, so an index lookup costs one index descent plus one table page fetch per matching RID.
+- Leaves are chained in key order by `next_leaf_page_id`; that chain is what makes range scans possible without revisiting internal nodes.
+
+**Simplifications (deliberate, for the course project).** The tree order is fixed at **order 4**, i.e. at most 3 keys per node (`kIndexMaxKeys = kIndexOrder - 1`), and keys are **int64**. Fixed order keeps split/promote logic small enough to reason about and to show on one slide; it also means a node is mostly empty space (see the honest note in §4.7). INT columns use the value as the key; DECIMAL columns are indexed as **cents** (`round(value × 100)`), because the key type is integer. VARCHAR keys are rejected: they would need a different key type.
+
+**Figure 2.** Splitting a full leaf (order 4) when a fourth key arrives.
+
+```
+before:   [ 1 | 2 | 3 | 4 ]                    (4 keys = overflow)
+after:    [ 1 | 2 ]      [ 3 | 4 ]
+              \             ^
+               \            |
+             next_leaf ----+        parent gains separator 3 (copy-up:
+                                    the key stays in the right leaf)
+
+internal split (push-up):  [ 5 | 7 | 9 | 11 ]  ->  median 9 moves up,
+                           left keeps [5,7], right keeps [11], children split 3 / 2
+```
+
+### 4.6 Index operations and pin discipline
+
+- **Insert** descends to the leaf taking the first separator `>= key` (so equal keys stay left), inserts at the upper bound of the key's run, and splits on overflow: a leaf split copies its first key up, an internal split pushes its median up. Splits propagate to the root; when the root splits, a new root is allocated and the height grows by one.
+- **Point lookup** descends the same way and returns every RID whose key matches. Because duplicates may straddle a leaf boundary, it keeps following `next_leaf_page_id` while the current leaf's last key is still `<= key`; entries are only collected while `key` matches, so a duplicate run that spans many leaves is returned in full.
+- **Range scan** descends to the leaf where the range starts, then walks the leaf chain forward until a key exceeds the upper bound.
+- **Pin discipline.** A descent holds **one** pin at a time: a node is fetched, decoded into memory, and unpinned before its child is fetched, and the path back to the root is remembered as page ids only. A split holds **two** pins — the node being split and its new right sibling — and releases both before propagating to the parent, so no more than two index pages are ever pinned at once. All index node I/O goes through the buffer pool; the tests assert that the pool has no pinned frames left when they finish.
+- **CREATE INDEX** scans the table exactly like `SeqScan` (one table page pinned at a time), inserts `(key, RID)` into a fresh tree, flushes it, and records `root_page_id`, `height` and `order` in `catalog.json` (§4.5 node format, §3.1 catalog). NULL values are not indexed.
+- **IndexScan** turns a WHERE clause into a key range, reads the matching RIDs from the tree, fetches each base tuple by RID, drops RIDs whose slot was tombstoned, and **rechecks the predicate**. Range bounds are widened by one key unit on purpose: the recheck makes a superset range safe, which absorbs decimal scaling and float rounding instead of silently dropping rows.
+
+### 4.7 Phase 3 verification
+
+The tree was exercised with the three required workloads. Table 2 reports what the tests measured (raw log: `docs/evidence/phase3_tests.txt`).
+
+**Table 2.** B+tree verification (order 4, 8 KB pages, 64-frame index buffer pool).
+
+| Workload | Inserted entries | Height | Leaves | Index pages | Insert time | Lookups / ranges verified | Outcome |
+|---|---|---|---|---|---|---|---|
+| 10,000 ascending keys | 10,000 | 9 | 5,000 | 7,501 | 51.6 ms | all 10,000 found; range `[9000,9100]` = 101 rows; full range in key order | PASS |
+| 10,000 random keys (adversarial order) | 10,000 | 9 | 4,270 | 6,452 | 123.4 ms | all 10,000 found; full range returns all keys in sorted order; missing key empty | PASS |
+| 5,000 duplicate entries (50 keys × 100 copies, interleaved) | 5,000 | 9 | 2,498 | 4,662 | 70.0 ms | each key returns exactly its 100 RIDs, once each; range returns 5,000 | PASS |
+
+**Access-path equivalence.** A 605-row `Items` table (600 rows priced `0.25 × i`, plus 5 rows priced `60.00` so the index must handle duplicates) was queried on the SeqScan+Filter path, then `CREATE INDEX idx_price ON Items (RetailPrice)` was run and the same SQL re-executed. `EXPLAIN` flips from `Filter → SeqScan` to `IndexScan(...)`, and the result multisets are identical for `RetailPrice > 50` (405 rows), `RetailPrice = 60.00`, `RetailPrice >= 50 AND RetailPrice <= 60`, and `COUNT(*)` (405). The index metadata survives a restart (a fresh catalog + engine still plans an `IndexScan`), and the same equivalence holds on the 5,000-row CLI table: `COUNT(*) WHERE price > 1.5` returns 4949 rows on both paths and `price > 50.95` returns the same four rows (`docs/evidence/phase3_cli_verify.txt`).
+
+**Honest notes / limitations.** (i) Order 4 is chosen for clarity, not capacity: a node holds 3 keys, so 10,000 keys need ~7,500 pages (~59 MB) — a production order (~500 keys per 8 KB page) would need roughly two orders of magnitude fewer pages. (ii) `CREATE INDEX` builds the index from a table snapshot; Phase 3 does **not** maintain indexes on `INSERT` / `UPDATE` / `DELETE`. Reads stay safe because the executor discards tombstoned RIDs and rechecks the predicate, but rows written after the build are not reachable through the index — rebuild the index after bulk changes. (iii) Phase 3 installs a simple rule ("use an existing index when the WHERE clause yields key bounds"); Phase 4 replaces it with the cost-based choice.
+
+> **Plain-English summary**
+> - An index page is an 8 KB block: leaves hold sorted keys plus table RIDs and a link to the next leaf; internal pages hold separator keys and child page ids.
+> - Splitting a full leaf copies its first key up to the parent; splitting an internal node pushes its middle key up; splitting the root adds a level.
+> - Lookups can return every copy of a duplicated key even when the copies sit in several different leaves.
+> - Only one index page is pinned while descending, two while splitting — so a split cannot pin the whole path.
+> - 10,000 ascending, 10,000 random and 5,000 duplicate keys all verified, and the index returns exactly the same rows as a sequential scan plus filter.
 
 ---
 

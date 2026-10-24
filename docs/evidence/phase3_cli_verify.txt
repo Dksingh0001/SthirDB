@@ -1,0 +1,70 @@
+$ ./build/sthirdb count
+count: 5000 live row(s) in Items (5000 physical tuple(s), 41 page(s))
+$ ./build/sthirdb init_schema
+init_schema: table Items ready at ./data/retail/items.dat (41 page(s), already initialized)
+
+--- SeqScan + Filter (no index yet) ---
+$ ./build/sthirdb run 'EXPLAIN SELECT * FROM Items WHERE price > 1.5'
++--------------------------+
+| QUERY PLAN               |
++--------------------------+
+| Filter
+  SeqScan(Items)
+ |
++--------------------------+
+(1 row(s))
+$ ./build/sthirdb run 'SELECT COUNT(*) FROM Items WHERE price > 1.5'
++----------+
+| COUNT(*) |
++----------+
+| 4949     |
++----------+
+(1 row(s))
+$ ./build/sthirdb run 'SELECT * FROM Items WHERE price > 50.95'
++------+-----------+-------+
+| id   | name      | price |
++------+-----------+-------+
+| 4997 | item_4997 | 50.96 |
+| 4998 | item_4998 | 50.97 |
+| 4999 | item_4999 | 50.98 |
+| 5000 | item_5000 | 50.99 |
++------+-----------+-------+
+(4 row(s))
+
+--- CREATE INDEX idx_price ON Items (price) ---
+$ ./build/sthirdb run 'CREATE INDEX idx_price ON Items (price)'
+Query OK, 5000 row(s) affected
+
+--- IndexScan (same queries, same answers) ---
+$ ./build/sthirdb run 'EXPLAIN SELECT * FROM Items WHERE price > 1.5'
++--------------------------------------------------------------+
+| QUERY PLAN                                                   |
++--------------------------------------------------------------+
+| IndexScan(Items using idx_price on price, keys [150, +inf))
+ |
++--------------------------------------------------------------+
+(1 row(s))
+$ ./build/sthirdb run 'SELECT COUNT(*) FROM Items WHERE price > 1.5'
++----------+
+| COUNT(*) |
++----------+
+| 4949     |
++----------+
+(1 row(s))
+$ ./build/sthirdb run 'SELECT * FROM Items WHERE price > 50.95'
++------+-----------+-------+
+| id   | name      | price |
++------+-----------+-------+
+| 4997 | item_4997 | 50.96 |
+| 4998 | item_4998 | 50.97 |
+| 4999 | item_4999 | 50.98 |
+| 5000 | item_5000 | 50.99 |
++------+-----------+-------+
+(4 row(s))
+$ ./build/sthirdb run 'SELECT * FROM Items WHERE price = 25.55'
++------+-----------+-------+
+| id   | name      | price |
++------+-----------+-------+
+| 2456 | item_2456 | 25.55 |
++------+-----------+-------+
+(1 row(s))

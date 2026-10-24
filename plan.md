@@ -207,11 +207,11 @@
 - [x] All node accesses routed through the buffer pool with correct pin/unpin.
 - [x] `CREATE INDEX idx ON t (col)` DDL parsed and executed (build by scanning the table).
 - [x] `IndexScan` RA node + executor implemented.
-- [ ] Unit test: insert 10,000 ascending keys and verify lookups + range scans.
-- [ ] Unit test: insert 10,000 random keys (adversarial order) and verify.
-- [ ] Unit test: duplicate keys return all matching RIDs.
-- [ ] **Verify:** with an index on `RetailPrice`, `SELECT * FROM Items WHERE RetailPrice > 50` returns the same rows as the SeqScan+Filter path.
-- [ ] **Report contribution (single report, §4 continued):** B+tree node-format figure + the 10,000-key ascending/random/duplicate test results written into `docs/report.md` §4; evidence in `docs/evidence/`.
+- [x] Unit test: insert 10,000 ascending keys and verify lookups + range scans.
+- [x] Unit test: insert 10,000 random keys (adversarial order) and verify.
+- [x] Unit test: duplicate keys return all matching RIDs.
+- [x] **Verify:** with an index on `RetailPrice`, `SELECT * FROM Items WHERE RetailPrice > 50` returns the same rows as the SeqScan+Filter path.
+- [x] **Report contribution (single report, §4 continued):** B+tree node-format figure + the 10,000-key ascending/random/duplicate test results written into `docs/report.md` §4; evidence in `docs/evidence/`.
 - [ ] Phase committed.
 
 ---
