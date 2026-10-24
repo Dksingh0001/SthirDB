@@ -122,11 +122,58 @@ void test_catalog_persistence_across_restart() {
   test_passed("catalog_persistence_across_restart");
 }
 
+void test_catalog_index_metadata_roundtrip() {
+  CleanTestFiles();
+  {
+    sthir::Catalog catalog(kTestCatalogPath);
+    std::string err;
+    sthir::TableSchema schema;
+    schema.table_name = "Items";
+    schema.columns = {
+        {"ItemID", sthir::DataType::INT, 4, true, true, false},
+        {"RetailPrice", sthir::DataType::DECIMAL, 8, false, false, false}};
+    CHECK(catalog.CreateTable(schema, &err));
+
+    sthir::IndexMetadata idx;
+    idx.index_name = "idx_price";
+    idx.column_name = "RetailPrice";
+    idx.root_page_id = 42;
+    idx.height = 3;
+    idx.order = 4;
+    CHECK(catalog.AddIndex("Items", idx, &err));
+
+    // Unknown column is rejected.
+    sthir::IndexMetadata bad;
+    bad.index_name = "idx_missing";
+    bad.column_name = "NoSuchColumn";
+    CHECK(!catalog.AddIndex("Items", bad, &err));
+  }
+
+  // Tree metadata must survive a restart.
+  {
+    sthir::Catalog catalog(kTestCatalogPath);
+    std::string err;
+    CHECK(catalog.Load(&err));
+    const auto* tbl = catalog.GetTable("items");
+    CHECK(tbl != nullptr);
+    CHECK_EQ(tbl->indexes.size(), 1u);
+    CHECK_EQ(tbl->indexes[0].index_name, "idx_price");
+    CHECK_EQ(tbl->indexes[0].column_name, "RetailPrice");
+    CHECK_EQ(tbl->indexes[0].root_page_id, 42u);
+    CHECK_EQ(tbl->indexes[0].height, 3u);
+    CHECK_EQ(tbl->indexes[0].order, 4u);
+  }
+
+  CleanTestFiles();
+  test_passed("catalog_index_metadata_roundtrip");
+}
+
 }  // namespace
 
 int main() {
   test_catalog_create_and_lookup();
   test_catalog_validation_errors();
   test_catalog_persistence_across_restart();
+  test_catalog_index_metadata_roundtrip();
   return 0;
 }

@@ -451,6 +451,10 @@ bool Catalog::Load(std::string* err) {
         if (ic && ic->type == json::Type::String) idx.column_name = ic->str_val;
         const auto* ir = idx_item.Find("root_page_id");
         if (ir && ir->type == json::Type::Number) idx.root_page_id = static_cast<uint32_t>(ir->num_val);
+        const auto* ih = idx_item.Find("height");
+        if (ih && ih->type == json::Type::Number) idx.height = static_cast<uint32_t>(ih->num_val);
+        const auto* io = idx_item.Find("order");
+        if (io && io->type == json::Type::Number) idx.order = static_cast<uint32_t>(io->num_val);
         s.indexes.push_back(idx);
       }
     }
@@ -563,7 +567,9 @@ bool Catalog::Save(std::string* err) const {
       const auto& idx = s.indexes[i];
       f << "        {\"index_name\": "; json::EscapeString(idx.index_name, f);
       f << ", \"column_name\": "; json::EscapeString(idx.column_name, f);
-      f << ", \"root_page_id\": " << idx.root_page_id << "}";
+      f << ", \"root_page_id\": " << idx.root_page_id;
+      f << ", \"height\": " << idx.height;
+      f << ", \"order\": " << idx.order << "}";
       if (i + 1 < s.indexes.size()) f << ",";
       f << "\n";
     }

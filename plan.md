@@ -198,7 +198,7 @@
 
 ### Checklist
 - [x] B+tree node page format (leaf + internal) implemented with serialize/deserialize.
-- [ ] Tree metadata (root page id, height, order) persisted in the catalog.
+- [x] Tree metadata (root page id, height, order) persisted in the catalog.
 - [x] `insert(key, rid)` implemented with correct leaf insertion.
 - [x] Leaf split + parent update implemented, including internal-node split.
 - [x] Root split and height growth implemented.

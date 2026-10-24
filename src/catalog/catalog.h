@@ -40,10 +40,14 @@ struct CheckConstraint {
   std::string expression;
 };
 
+// Tree metadata for one B+tree index. root_page_id and height describe the
+// on-disk tree; order is recorded so a future build can reject order mismatches.
 struct IndexMetadata {
   std::string index_name;
   std::string column_name;
   uint32_t root_page_id = 0;
+  uint32_t height = 0;
+  uint32_t order = 4;
 };
 
 struct TableSchema {
