@@ -31,6 +31,9 @@ struct ExecutionResult {
   double actual_time_ms = 0.0;
   std::vector<PlanAlternative> alternatives;     // rejected candidates, with costs
   std::string plan_text;                         // indented plan tree with estimates
+  // Phase 4B hook: "Applied rules: ..." when constraint_aware = on, else empty.
+  // Phase 4 implements no rules, so it currently always reports "(none)".
+  std::string rules_line;
   bool has_plan_info = false;
 
   void PrintTable(std::ostream& os = std::cout) const;

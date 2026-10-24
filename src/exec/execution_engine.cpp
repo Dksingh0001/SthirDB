@@ -423,6 +423,13 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
                 "  rows=" + FormatCost(alternative.rows) + "\n";
       }
     }
+    // Phase 4B hook: list every constraint-aware rule that fired while
+    // planning. Phase 4 implements no rules, so nothing can fire yet.
+    if (GetSessionFlag("constraint_aware") == "on") {
+      res.rules_line =
+          "Applied rules: (none - constraint-aware rules arrive in Phase 4B)";
+      text += res.rules_line + "\n";
+    }
 
     res.success = true;
     res.is_query = true;
@@ -535,6 +542,10 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
   res.rows_estimated = plan->estimated_rows();
   res.alternatives = plan->alternatives();
   res.plan_text = plan->ToString();
+  if (GetSessionFlag("constraint_aware") == "on") {
+    res.rules_line =
+        "Applied rules: (none - constraint-aware rules arrive in Phase 4B)";
+  }
   res.has_plan_info = true;
 
   return res;

@@ -381,6 +381,20 @@ void test_engine_reports_estimate_and_actual() {
   CHECK_EQ(indexed.alternatives.size(), 1u);
   CHECK(indexed.alternatives[0].name.find("IndexScan(idx_price)") != std::string::npos);
   CHECK(indexed.alternatives[0].cost > indexed.estimated_cost);
+  CHECK(indexed.rules_line.empty());  // constraint_aware off: no rules section
+
+  // Phase 4B hook: with constraint_aware on, EXPLAIN reports which rules fired
+  // (Phase 4 has none, so the list is explicitly empty).
+  Run(env, "SET constraint_aware = on");
+  auto explained = Run(env, "EXPLAIN SELECT * FROM Items WHERE RetailPrice > 25");
+  CHECK(explained.rows[0][0].find("Applied rules:") != std::string::npos);
+  CHECK(explained.rows[0][0].find("none") != std::string::npos);
+  CHECK_EQ(explained.rules_line.find("Applied rules:"), 0u);
+  auto selected = Run(env, "SELECT * FROM Items WHERE RetailPrice > 25");
+  CHECK_EQ(selected.rules_line.find("Applied rules:"), 0u);
+  Run(env, "SET constraint_aware = off");
+  auto unexplained = Run(env, "EXPLAIN SELECT * FROM Items WHERE RetailPrice > 25");
+  CHECK(unexplained.rows[0][0].find("Applied rules:") == std::string::npos);
   test_passed("engine_reports_estimate_and_actual");
 }
 

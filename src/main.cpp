@@ -211,6 +211,7 @@ int CmdOptimizer(const std::string& sql, bool force_seq = false, bool force_inde
   }
 
   std::printf("Chosen plan (%s):\n%s\n", res.chosen_path.c_str(), res.plan_text.c_str());
+  if (!res.rules_line.empty()) std::printf("%s\n", res.rules_line.c_str());
 
   sthir::ExecutionResult summary;
   summary.is_query = true;
