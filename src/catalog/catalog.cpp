@@ -3,6 +3,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
@@ -75,6 +76,16 @@ const Column* TableSchema::GetColumn(const std::string& col_name) const {
 
 bool TableSchema::HasColumn(const std::string& col_name) const {
   return FindColumnIndex(col_name) >= 0;
+}
+
+const ColumnStats* TableSchema::GetColumnStats(const std::string& col_name) const {
+  const int idx = FindColumnIndex(col_name);
+  if (idx < 0) return nullptr;
+  const std::string& name = columns[static_cast<size_t>(idx)].name;
+  for (const auto& stats : column_stats) {
+    if (stats.column_name == name) return &stats;
+  }
+  return nullptr;
 }
 
 // -------------------------------------------------------------
@@ -440,6 +451,50 @@ bool Catalog::Load(std::string* err) {
       }
     }
 
+    const json::Value* v_stats = item.Find("statistics");
+    if (v_stats && v_stats->type == json::Type::Array) {
+      for (const auto& st_item : v_stats->arr_val) {
+        if (st_item.type != json::Type::Object) continue;
+        ColumnStats stats;
+        const auto* scn = st_item.Find("column_name");
+        if (scn && scn->type == json::Type::String) stats.column_name = scn->str_val;
+        const auto* src6 = st_item.Find("row_count");
+        if (src6 && src6->type == json::Type::Number) {
+          stats.row_count = static_cast<uint64_t>(src6->num_val);
+        }
+        const auto* snull = st_item.Find("null_count");
+        if (snull && snull->type == json::Type::Number) {
+          stats.null_count = static_cast<uint64_t>(snull->num_val);
+        }
+        const auto* sndv = st_item.Find("ndv");
+        if (sndv && sndv->type == json::Type::Number) {
+          stats.ndv = static_cast<uint64_t>(sndv->num_val);
+        }
+        const auto* smin = st_item.Find("min");
+        if (smin && smin->type == json::Type::Number) stats.min_value = smin->num_val;
+        const auto* smax = st_item.Find("max");
+        if (smax && smax->type == json::Type::Number) stats.max_value = smax->num_val;
+        const auto* shist = st_item.Find("histogram");
+        if (shist && shist->type == json::Type::Array) {
+          for (const auto& b_item : shist->arr_val) {
+            if (b_item.type != json::Type::Object) continue;
+            HistogramBucket bucket;
+            const auto* blo = b_item.Find("lo");
+            if (blo && blo->type == json::Type::Number) bucket.lo = blo->num_val;
+            const auto* bhi = b_item.Find("hi");
+            if (bhi && bhi->type == json::Type::Number) bucket.hi = bhi->num_val;
+            const auto* bcnt = b_item.Find("count");
+            if (bcnt && bcnt->type == json::Type::Number) {
+              bucket.count = static_cast<uint64_t>(bcnt->num_val);
+            }
+            stats.histogram.push_back(bucket);
+          }
+        }
+        stats.valid = stats.row_count > 0 && stats.ndv > 0;
+        if (!stats.column_name.empty()) s.column_stats.push_back(std::move(stats));
+      }
+    }
+
     const json::Value* v_idx = item.Find("indexes");
     if (v_idx && v_idx->type == json::Type::Array) {
       for (const auto& idx_item : v_idx->arr_val) {
@@ -573,6 +628,28 @@ bool Catalog::Save(std::string* err) const {
       if (i + 1 < s.indexes.size()) f << ",";
       f << "\n";
     }
+    f << "      ],\n";
+
+    // statistics (one entry per analyzed column)
+    f << "      \"statistics\": [\n";
+    for (size_t i = 0; i < s.column_stats.size(); ++i) {
+      const auto& stats = s.column_stats[i];
+      f << "        {\"column_name\": "; json::EscapeString(stats.column_name, f);
+      f << ", \"row_count\": " << stats.row_count;
+      f << ", \"null_count\": " << stats.null_count;
+      f << ", \"ndv\": " << stats.ndv;
+      f << ", \"min\": " << std::setprecision(17) << stats.min_value;
+      f << ", \"max\": " << stats.max_value;
+      f << ", \"histogram\": [";
+      for (size_t b = 0; b < stats.histogram.size(); ++b) {
+        f << "{\"lo\": " << stats.histogram[b].lo << ", \"hi\": " << stats.histogram[b].hi
+          << ", \"count\": " << stats.histogram[b].count << "}";
+        if (b + 1 < stats.histogram.size()) f << ", ";
+      }
+      f << "]}";
+      if (i + 1 < s.column_stats.size()) f << ",";
+      f << "\n";
+    }
     f << "      ]\n";
 
     f << "    }";
@@ -703,6 +780,35 @@ bool Catalog::AddIndex(const std::string& table_name, const IndexMetadata& idx, 
     return false;
   }
   it->second.indexes.push_back(idx);
+  return Save(err);
+}
+
+bool Catalog::SetColumnStats(const std::string& table_name, const ColumnStats& stats,
+                             std::string* err) {
+  const std::string lower = ToLower(table_name);
+  auto it = tables_.find(lower);
+  if (it == tables_.end()) {
+    if (err) *err = "table '" + table_name + "' not found";
+    return false;
+  }
+  if (!it->second.HasColumn(stats.column_name)) {
+    if (err) *err = "column '" + stats.column_name + "' not found in table '" + table_name + "'";
+    return false;
+  }
+
+  ColumnStats stored = stats;
+  stored.column_name = it->second.columns[static_cast<size_t>(it->second.FindColumnIndex(stats.column_name))].name;
+  stored.valid = true;
+
+  bool replaced = false;
+  for (auto& existing : it->second.column_stats) {
+    if (existing.column_name == stored.column_name) {
+      existing = stored;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) it->second.column_stats.push_back(stored);
   return Save(err);
 }
 

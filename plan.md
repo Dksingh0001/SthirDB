@@ -238,8 +238,8 @@
 - **Actual vs. estimated:** after execution, print `estimated_cost`, `actual_time_ms`, and `rows_estimated` vs. `rows_actual` so the report can quantify estimation error.
 
 ### Checklist
-- [ ] Column statistics (row_count, NDV, min, max) computed and persisted at index-build time.
-- [ ] 3-bucket histogram structure built and persisted per indexed column.
+- [x] Column statistics (row_count, NDV, min, max) computed and persisted at index-build time.
+- [x] 3-bucket histogram structure built and persisted per indexed column.
 - [ ] Equality selectivity estimator implemented.
 - [ ] Range selectivity estimator (histogram-based) implemented.
 - [ ] AND/OR selectivity combination implemented.

@@ -8,6 +8,7 @@
 #include "index/bplus_tree.h"
 #include "index/index_builder.h"
 #include "index/index_scan.h"
+#include "optimizer/statistics.h"
 #include "parser/lexer.h"
 #include "parser/parser.h"
 #include "planner/planner.h"
@@ -318,6 +319,22 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
       return res;
     }
 
+    // Phase 4: an index build also refreshes the statistics of its column, so
+    // the optimizer can estimate selectivities without a separate ANALYZE.
+    ColumnStats stats;
+    std::string stats_err;
+    if (!ComputeColumnStats(*schema, meta.column_name, sc->dm.get(), sc->bp.get(), &stats,
+                            &stats_err)) {
+      res.success = false;
+      res.error_message = stats_err;
+      return res;
+    }
+    if (!catalog_->SetColumnStats(schema->table_name, stats, &catalog_err)) {
+      res.success = false;
+      res.error_message = catalog_err;
+      return res;
+    }
+
     res.success = true;
     res.is_query = false;
     res.rows_affected = built.entries;
@@ -338,13 +355,33 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
 
   if (stmt->type() == StmtType::ANALYZE) {
     auto* an = static_cast<AnalyzeStmt*>(stmt.get());
-    if (!catalog_->HasTable(an->table_name())) {
+    const TableSchema* schema = catalog_ ? catalog_->GetTable(an->table_name()) : nullptr;
+    if (schema == nullptr) {
       res.success = false;
       res.error_message = "table '" + an->table_name() + "' does not exist";
       return res;
     }
+
+    StorageContext* sc = GetStorage(schema->table_name);
+    std::vector<ColumnStats> stats;
+    std::string stats_err;
+    if (!ComputeTableStats(*schema, sc->dm.get(), sc->bp.get(), &stats, &stats_err)) {
+      res.success = false;
+      res.error_message = stats_err;
+      return res;
+    }
+    for (const auto& column_stats : stats) {
+      std::string catalog_err;
+      if (!catalog_->SetColumnStats(schema->table_name, column_stats, &catalog_err)) {
+        res.success = false;
+        res.error_message = catalog_err;
+        return res;
+      }
+    }
+
     res.success = true;
     res.is_query = false;
+    res.rows_affected = stats.size();  // columns analyzed
     return res;
   }
 
