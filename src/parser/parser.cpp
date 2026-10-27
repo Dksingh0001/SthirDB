@@ -5,6 +5,48 @@
 
 namespace sthir {
 
+std::vector<std::string> SplitSqlScript(const std::string& script) {
+  std::vector<std::string> statements;
+  std::string current;
+  bool in_string = false;
+  bool in_comment = false;
+  for (size_t i = 0; i < script.size(); ++i) {
+    const char c = script[i];
+    if (in_comment) {
+      if (c == '\n') {
+        in_comment = false;
+        current.push_back(' ');
+      }
+      continue;
+    }
+    if (!in_string && c == '-' && i + 1 < script.size() && script[i + 1] == '-') {
+      in_comment = true;
+      ++i;
+      continue;
+    }
+    if (c == '\'') {
+      in_string = !in_string;
+      current.push_back(c);
+      continue;
+    }
+    if (c == ';' && !in_string) {
+      statements.push_back(current);
+      current.clear();
+      continue;
+    }
+    current.push_back(c);
+  }
+  if (!current.empty()) statements.push_back(current);
+
+  // Drop statements that are empty or only whitespace/comments.
+  std::vector<std::string> nonempty;
+  for (auto& s : statements) {
+    const size_t first = s.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos) nonempty.push_back(s);
+  }
+  return nonempty;
+}
+
 Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
 
 const Token& Parser::Peek() const {

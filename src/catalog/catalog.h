@@ -40,6 +40,25 @@ struct CheckConstraint {
   std::string expression;
 };
 
+// Phase 4B constraint-catalog view of one foreign-key edge, with the two
+// facts the constraint-aware rules need:
+//   * child_not_null — safety condition of R3 (join elimination): an FK that
+//     cannot be NULL guarantees every child row has a parent, so a join whose
+//     parent columns are unused can be dropped.
+//   * parent_unique  — input of R4 (FK join cardinality): when the parent
+//     columns are a declared key, child⋈parent yields exactly rows(child).
+// Whether the edge is *enforced* in the running session is the engine's
+// `constraints_enabled` session flag, read separately by the rules.
+struct ForeignKeyInfo {
+  std::string child_table;
+  std::vector<std::string> child_columns;
+  std::string parent_table;
+  std::vector<std::string> parent_columns;
+  bool child_not_null = false;
+  bool parent_unique = false;
+  ForeignKey::OnDelete on_delete = ForeignKey::OnDelete::RESTRICT;
+};
+
 // Locked histogram format for Phase 4: exactly kHistogramBuckets equi-width
 // buckets over [min_value, max_value]. The last bucket is closed at max_value.
 inline constexpr uint32_t kHistogramBuckets = 3;
@@ -120,6 +139,15 @@ class Catalog {
   // Replaces (or adds) the statistics of one column and persists the catalog.
   bool SetColumnStats(const std::string& table_name, const ColumnStats& stats,
                       std::string* err = nullptr);
+
+  // Every foreign-key edge in the schema, sorted for deterministic output.
+  // This is the Phase 7 -> Phase 4B hand-off that lets rules R3 (join
+  // elimination) and R4 (FK join cardinality) run against the real retail
+  // schema.
+  std::vector<ForeignKeyInfo> GetForeignKeyInfo() const;
+
+  // Foreign keys whose child table is `table_name` (case-insensitive).
+  std::vector<ForeignKeyInfo> GetForeignKeysOn(const std::string& table_name) const;
 
   const std::string& catalog_path() const { return catalog_path_; }
 

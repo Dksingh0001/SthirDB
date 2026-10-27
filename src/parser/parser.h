@@ -9,6 +9,11 @@
 
 namespace sthir {
 
+// Splits a SQL script into statements on ';', honouring single-quoted string
+// literals and dropping `--` line comments. Used by the CLI's `sql <file>`
+// command and by the tests that load scripts/retail_schema.sql.
+std::vector<std::string> SplitSqlScript(const std::string& script);
+
 class Parser {
  public:
   explicit Parser(std::vector<Token> tokens);

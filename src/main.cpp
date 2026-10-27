@@ -9,6 +9,7 @@
 #include "catalog/catalog.h"
 #include "common/config.h"
 #include "exec/execution_engine.h"
+#include "parser/parser.h"
 #include "storage/buffer_pool.h"
 #include "storage/disk_manager.h"
 #include "storage/page.h"
@@ -255,50 +256,6 @@ bool ParseRowsArg(int argc, char** argv, size_t* out_rows) {
   return true;
 }
 
-// Splits a SQL script into statements on ';', honouring single-quoted string
-// literals and dropping `--` line comments. Returns the statement texts.
-std::vector<std::string> SplitSqlScript(const std::string& script) {
-  std::vector<std::string> statements;
-  std::string current;
-  bool in_string = false;
-  bool in_comment = false;
-  for (size_t i = 0; i < script.size(); ++i) {
-    const char c = script[i];
-    if (in_comment) {
-      if (c == '\n') {
-        in_comment = false;
-        current.push_back(' ');
-      }
-      continue;
-    }
-    if (!in_string && c == '-' && i + 1 < script.size() && script[i + 1] == '-') {
-      in_comment = true;
-      ++i;
-      continue;
-    }
-    if (c == '\'') {
-      in_string = !in_string;
-      current.push_back(c);
-      continue;
-    }
-    if (c == ';' && !in_string) {
-      statements.push_back(current);
-      current.clear();
-      continue;
-    }
-    current.push_back(c);
-  }
-  if (!current.empty()) statements.push_back(current);
-
-  // Drop statements that are empty or only whitespace/comments.
-  std::vector<std::string> nonempty;
-  for (auto& s : statements) {
-    const size_t first = s.find_first_not_of(" \t\r\n");
-    if (first != std::string::npos) nonempty.push_back(s);
-  }
-  return nonempty;
-}
-
 // sql [--constraints on|off] <file>: run a whole SQL script in one session.
 int CmdSql(int argc, char** argv) {
   std::string constraints_flag = "";
@@ -344,7 +301,7 @@ int CmdSql(int argc, char** argv) {
     engine.SetSessionFlag("constraints_enabled", constraints_flag);
   }
 
-  const std::vector<std::string> statements = SplitSqlScript(script);
+  const std::vector<std::string> statements = sthir::SplitSqlScript(script);
   size_t executed = 0;
   for (const auto& stmt : statements) {
     auto res = engine.Execute(stmt);

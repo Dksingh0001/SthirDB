@@ -812,4 +812,79 @@ bool Catalog::SetColumnStats(const std::string& table_name, const ColumnStats& s
   return Save(err);
 }
 
+namespace {
+
+std::string LowerCopy(std::string s) {
+  for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// Case-insensitive column-list comparison (order-sensitive: FK column order
+// must match the referenced key's order).
+bool SameColumns(const std::vector<std::string>& a, const std::vector<std::string>& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (LowerCopy(a[i]) != LowerCopy(b[i])) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+std::vector<ForeignKeyInfo> Catalog::GetForeignKeyInfo() const {
+  std::vector<ForeignKeyInfo> out;
+  for (const auto& entry : tables_) {
+    const TableSchema& child = entry.second;
+    for (const auto& fk : child.foreign_keys) {
+      ForeignKeyInfo info;
+      info.child_table = child.table_name;
+      info.child_columns = fk.column_names;
+      info.parent_table = fk.ref_table_name;
+      info.parent_columns = fk.ref_column_names;
+      info.on_delete = fk.on_delete;
+
+      // R3 safety: the edge only guarantees a parent match when every child
+      // column is NOT NULL (declared NOT NULL or part of the primary key).
+      info.child_not_null = true;
+      for (const auto& col_name : fk.column_names) {
+        const Column* col = child.GetColumn(col_name);
+        if (col == nullptr || (!col->not_null && !col->primary_key)) {
+          info.child_not_null = false;
+          break;
+        }
+      }
+
+      // R4 input: the referenced columns must be a declared key (primary key
+      // or a UNIQUE group) for child-join-parent to yield rows(child).
+      info.parent_unique = false;
+      if (const TableSchema* parent = GetTable(fk.ref_table_name); parent != nullptr) {
+        info.parent_unique = SameColumns(parent->primary_key_columns, fk.ref_column_names);
+        for (const auto& group : parent->unique_constraints) {
+          if (SameColumns(group, fk.ref_column_names)) {
+            info.parent_unique = true;
+            break;
+          }
+        }
+      }
+      out.push_back(std::move(info));
+    }
+  }
+  // tables_ is an unordered_map; sort so consumers see a stable order.
+  std::sort(out.begin(), out.end(), [](const ForeignKeyInfo& a, const ForeignKeyInfo& b) {
+    if (a.child_table != b.child_table) return a.child_table < b.child_table;
+    if (a.parent_table != b.parent_table) return a.parent_table < b.parent_table;
+    return a.child_columns < b.child_columns;
+  });
+  return out;
+}
+
+std::vector<ForeignKeyInfo> Catalog::GetForeignKeysOn(const std::string& table_name) const {
+  const std::string lower = ToLower(table_name);
+  std::vector<ForeignKeyInfo> out;
+  for (auto& info : GetForeignKeyInfo()) {
+    if (ToLower(info.child_table) == lower) out.push_back(std::move(info));
+  }
+  return out;
+}
+
 }  // namespace sthir

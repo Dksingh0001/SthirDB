@@ -522,10 +522,10 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 - Compare against Yuan's published numbers as a sanity check (their constrained run was ~993.9 ms avg at 100 threads and ~2,637.3 ms at 500 threads, and ~49.4% faster than unconstrained at 500 threads). Your absolute numbers will differ; discuss why rather than claiming parity.
 
 ### Checklist
-- [ ] 8-table DDL written with all primary, foreign, unique, and check constraints.
+- [x] 8-table DDL written with all primary, foreign, unique, and check constraints.
 - [ ] 3NF justification written: FDs per table and an argument each that no non-trivial FD violates 3NF.
 - [ ] `CategoryName` denormalization trade-off documented (anomaly permitted, and why it is accepted).
-- [ ] FK/NOT NULL metadata exposed to the Phase 4B constraint catalog (enables R3/R4 verification).
+- [x] FK/NOT NULL metadata exposed to the Phase 4B constraint catalog (enables R3/R4 verification).
 - [ ] Constraint enforcement implemented in the engine (PK, FK, UNIQUE, CHECK, ON DELETE RESTRICT/CASCADE).
 - [ ] Constrained vs. unconstrained toggle implemented (single schema flag).
 - [ ] Data generator produces the target scale (100k / 300k / 5k / 1k) deterministically (fixed seed).
