@@ -14,6 +14,7 @@
 #include "storage/disk_manager.h"
 #include "storage/page.h"
 #include "storage/row.h"
+#include "workload/retail_gen.h"
 
 namespace fs = std::filesystem;
 
@@ -36,7 +37,11 @@ void PrintUsage() {
       "  sthirdb count               Count live rows in Items.\n"
       "  sthirdb recover             Run ARIES restart recovery over the WAL.\n"
       "  sthirdb sql [--constraints on|off] <file>\n"
-      "                             Execute every statement in <file> in order.\n",
+      "                             Execute every statement in <file> in order.\n"
+      "  sthirdb retail-gen [--shoppers N] [--items N] [--purchases N]\n"
+      "                      [--lpp N] [--seed N] [--constraints on|off]\n"
+      "                      [--no-index] [--no-analyze]\n"
+      "                             Deterministically load the retail dataset.\n",
       sthir::kVersion);
 }
 
@@ -322,6 +327,79 @@ int CmdSql(int argc, char** argv) {
 
 }  // namespace
 
+// retail-gen [--shoppers N] [--items N] [--purchases N] [--lpp N] [--seed N]
+//            [--constraints on|off] [--no-index] [--no-analyze]
+int CmdRetailGen(int argc, char** argv) {
+  sthir::RetailGenConfig cfg;
+  std::string constraints_flag;
+
+  auto next_u64 = [&](int* i, uint64_t* out) -> bool {
+    if (*i + 1 >= argc) return false;
+    errno = 0;
+    char* end = nullptr;
+    const std::string v = argv[++(*i)];
+    const unsigned long long parsed = std::strtoull(v.c_str(), &end, 10);
+    if (errno != 0 || end == v.c_str() || *end != '\0' || parsed == 0) return false;
+    *out = static_cast<uint64_t>(parsed);
+    return true;
+  };
+
+  for (int i = 2; i < argc; ++i) {
+    const std::string a = argv[i];
+    uint64_t v = 0;
+    if (a == "--shoppers" && next_u64(&i, &v)) {
+      cfg.shoppers = static_cast<uint32_t>(v);
+    } else if (a == "--items" && next_u64(&i, &v)) {
+      cfg.items = static_cast<uint32_t>(v);
+    } else if (a == "--purchases" && next_u64(&i, &v)) {
+      cfg.purchases = static_cast<uint32_t>(v);
+    } else if (a == "--lpp" && next_u64(&i, &v)) {
+      cfg.line_items_per_purchase = static_cast<uint32_t>(v);
+    } else if (a == "--seed" && next_u64(&i, &v)) {
+      cfg.seed = v;
+    } else if (a == "--constraints" && i + 1 < argc) {
+      constraints_flag = argv[++i];
+      if (constraints_flag != "on" && constraints_flag != "off") {
+        std::fprintf(stderr, "retail-gen: --constraints expects on|off\n");
+        return 2;
+      }
+    } else if (a == "--no-index") {
+      cfg.create_indexes = false;
+    } else if (a == "--no-analyze") {
+      cfg.analyze = false;
+    } else {
+      std::fprintf(stderr, "retail-gen: unknown or incomplete argument '%s'\n", a.c_str());
+      return 2;
+    }
+  }
+
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "retail-gen: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  if (!constraints_flag.empty()) engine.SetSessionFlag("constraints_enabled", constraints_flag);
+
+  sthir::RetailGenResult result;
+  if (!sthir::GenerateRetailData(&engine, cfg, &result, &err)) {
+    std::fprintf(stderr, "retail-gen: failed: %s\n", err.c_str());
+    return 1;
+  }
+
+  std::printf("retail-gen: seed=%llu, constraints=%s\n",
+              static_cast<unsigned long long>(cfg.seed),
+              constraints_flag.empty() ? "on" : constraints_flag.c_str());
+  for (const auto& [table, rows] : result.rows_by_table) {
+    std::printf("  %-24s %8zu\n", table.c_str(), rows);
+  }
+  std::printf("  %-24s %8zu rows in %.1f ms\n", "TOTAL", result.total_rows,
+              result.elapsed_ms);
+  std::printf("  constraint-backed indexes created: %zu\n", result.indexes_created);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     PrintUsage();
@@ -403,6 +481,9 @@ int main(int argc, char** argv) {
   }
   if (cmd == "sql") {
     return CmdSql(argc, argv);
+  }
+  if (cmd == "retail-gen") {
+    return CmdRetailGen(argc, argv);
   }
 
   std::fprintf(stderr, "sthirdb: unknown command '%s'\n", cmd.c_str());
