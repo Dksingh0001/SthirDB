@@ -1,6 +1,7 @@
 #include "planner/planner.h"
 
 #include <algorithm>
+#include <cctype>
 
 #include "index/index_scan.h"
 #include "optimizer/optimizer.h"
@@ -149,6 +150,110 @@ bool ValidateExprColumns(const Expr* expr, const TableSchema& schema, std::strin
   return true;
 }
 
+// One FROM/JOIN input: its schema and the WHERE conjuncts that were pushed
+// onto it (Phase 7 pushdown — lets a join query still choose an index path).
+struct JoinInput {
+  const TableSchema* schema = nullptr;
+  std::unique_ptr<Expr> pushed;
+};
+
+// Splits a predicate into its top-level AND conjuncts (cloned).
+void SplitConjuncts(const Expr* expr, std::vector<std::unique_ptr<Expr>>* out) {
+  if (!expr) return;
+  if (expr->type() == ExprType::BINARY_OP &&
+      static_cast<const BinaryExpr*>(expr)->op() == BinaryOp::AND) {
+    const auto* b = static_cast<const BinaryExpr*>(expr);
+    SplitConjuncts(b->left(), out);
+    SplitConjuncts(b->right(), out);
+    return;
+  }
+  out->push_back(expr->Clone());
+}
+
+void CollectColumnRefs(const Expr* expr, std::vector<const ColumnRefExpr*>* out) {
+  if (!expr) return;
+  switch (expr->type()) {
+    case ExprType::COLUMN_REF:
+      out->push_back(static_cast<const ColumnRefExpr*>(expr));
+      break;
+    case ExprType::UNARY_OP:
+      CollectColumnRefs(static_cast<const UnaryExpr*>(expr)->expr(), out);
+      break;
+    case ExprType::BINARY_OP: {
+      const auto* b = static_cast<const BinaryExpr*>(expr);
+      CollectColumnRefs(b->left(), out);
+      CollectColumnRefs(b->right(), out);
+      break;
+    }
+    case ExprType::IS_NULL_EXPR:
+      CollectColumnRefs(static_cast<const IsNullExpr*>(expr)->expr(), out);
+      break;
+    default:
+      break;
+  }
+}
+
+bool EqualIgnoreCase(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) !=
+        std::tolower(static_cast<unsigned char>(b[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Index of the single input a WHERE conjunct belongs to, or -1 when the
+// conjunct cannot be pushed below the joins (it spans several inputs, names
+// an unknown qualifier, or carries no columns at all). Only single-table
+// conjuncts are pushed; everything else stays above the join as before.
+int FindOwningInput(const Expr& pred, const std::vector<JoinInput>& inputs,
+                    const std::vector<std::string>& input_names) {
+  std::vector<const ColumnRefExpr*> refs;
+  CollectColumnRefs(&pred, &refs);
+  if (refs.empty()) return -1;
+
+  int owner = -1;
+  for (const ColumnRefExpr* ref : refs) {
+    int match = -1;
+    if (!ref->table_name().empty()) {
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        if (EqualIgnoreCase(ref->table_name(), input_names[i]) &&
+            inputs[i].schema->HasColumn(ref->column_name())) {
+          match = static_cast<int>(i);
+          break;
+        }
+      }
+      if (match < 0) return -1;  // unknown qualifier: leave it alone
+    } else {
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        if (!inputs[i].schema->HasColumn(ref->column_name())) continue;
+        if (match >= 0) return -1;  // ambiguous unqualified column
+        match = static_cast<int>(i);
+      }
+      if (match < 0) return -1;
+    }
+    if (owner < 0) owner = match;
+    else if (owner != match) return -1;  // spans two inputs
+  }
+  return owner;
+}
+
+// Merges the right input's columns into the accumulated join schema,
+// prefixing duplicate column names with the right table's name.
+TableSchema MergeJoinSchemas(const TableSchema& left, const TableSchema& right) {
+  TableSchema merged;
+  merged.table_name = left.table_name + "_" + right.table_name;
+  for (const auto& c : left.columns) merged.columns.push_back(c);
+  for (const auto& c : right.columns) {
+    Column col = c;
+    if (merged.HasColumn(col.name)) col.name = right.table_name + "." + col.name;
+    merged.columns.push_back(col);
+  }
+  return merged;
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::CreatePlan(const SQLStatement& stmt, std::string* err) {
@@ -174,79 +279,102 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
     return nullptr;
   }
 
-  std::unique_ptr<PlanNode> current_plan =
-      std::make_unique<SeqScanPlan>(from_schema->table_name, *from_schema);
-  TableSchema current_schema = *from_schema;
-  std::vector<PlanAlternative> rejected_paths;
-  std::string chosen_path = "SeqScan";
-
-  // Handle JOIN chains: one NestedLoopJoin per JOIN clause, merging schemas
-  // left to right (Phase 7 needs the four-table Yuan workload query).
+  // Inputs: the FROM table plus one entry per JOIN clause.
+  std::vector<JoinInput> inputs;
+  std::vector<std::string> input_names;
+  inputs.push_back({from_schema, nullptr});
+  input_names.push_back(stmt.from_table);
   for (const auto& clause : stmt.joins) {
     const TableSchema* join_schema = catalog_.GetTable(clause.table_name);
     if (!join_schema) {
       if (err) *err = "joined table '" + clause.table_name + "' does not exist";
       return nullptr;
     }
-    auto right_plan = std::make_unique<SeqScanPlan>(join_schema->table_name, *join_schema);
-
-    // Merge schemas
-    TableSchema merged_schema;
-    merged_schema.table_name = current_schema.table_name + "_" + join_schema->table_name;
-    for (const auto& c : current_schema.columns) {
-      Column col = c;
-      merged_schema.columns.push_back(col);
-    }
-    for (const auto& c : join_schema->columns) {
-      Column col = c;
-      // If duplicate column name across tables, prefix with table name
-      if (merged_schema.HasColumn(col.name)) {
-        col.name = join_schema->table_name + "." + col.name;
-      }
-      merged_schema.columns.push_back(col);
-    }
-
-    if (clause.on) {
-      if (!ValidateExprColumns(clause.on.get(), merged_schema, err)) {
-        return nullptr;
-      }
-    }
-
-    current_plan = std::make_unique<NestedLoopJoinPlan>(
-        CloneExpr(clause.on.get()),
-        std::move(current_plan),
-        std::move(right_plan),
-        merged_schema);
-    current_schema = merged_schema;
+    inputs.push_back({join_schema, nullptr});
+    input_names.push_back(clause.table_name);
   }
 
-  // Validate columns in SELECT list
-  if (!stmt.is_select_all) {
-    for (const auto& item : stmt.select_list) {
-      if (!ValidateExprColumns(item.expr.get(), current_schema, err)) {
-        return nullptr;
-      }
-    }
-  }
-
-  // Handle WHERE: validate, then let the optimizer pick the access path.
+  // Predicate pushdown: every WHERE conjunct that belongs to exactly one input
+  // moves below the joins, so that input gets its own access-path choice.
+  std::vector<std::unique_ptr<Expr>> residual_where;
   if (stmt.where_clause) {
-    if (!ValidateExprColumns(stmt.where_clause.get(), current_schema, err)) {
+    std::vector<std::unique_ptr<Expr>> conjuncts;
+    SplitConjuncts(stmt.where_clause.get(), &conjuncts);
+    for (auto& conjunct : conjuncts) {
+      const int owner = FindOwningInput(*conjunct, inputs, input_names);
+      if (owner < 0) {
+        residual_where.push_back(std::move(conjunct));
+        continue;
+      }
+      if (!ValidateExprColumns(conjunct.get(), *inputs[owner].schema, err)) {
+        return nullptr;
+      }
+      if (!inputs[owner].pushed) {
+        inputs[owner].pushed = std::move(conjunct);
+      } else {
+        inputs[owner].pushed = std::make_unique<BinaryExpr>(
+            BinaryOp::AND, std::move(inputs[owner].pushed), std::move(conjunct));
+      }
+    }
+  }
+
+  // Merge schemas left to right, validating every ON clause as its join is
+  // added (the ON predicate may reference anything seen so far).
+  TableSchema merged_schema = *inputs[0].schema;
+  for (size_t i = 1; i < inputs.size(); ++i) {
+    TableSchema next = MergeJoinSchemas(merged_schema, *inputs[i].schema);
+    if (stmt.joins[i - 1].on &&
+        !ValidateExprColumns(stmt.joins[i - 1].on.get(), next, err)) {
       return nullptr;
     }
-    if (!stmt.joins.empty()) {
-      // The join's output schema only exists after the join, so the filter
-      // stays above it; access-path choice is single-table only in Phase 4.
-      current_plan = std::make_unique<FilterPlan>(
-          CloneExpr(stmt.where_clause.get()),
-          std::move(current_plan));
-    } else {
-      AccessPathChoice choice = ChooseAccessPath(*from_schema, stmt.where_clause.get(),
-                                                     allow_index_scan_, allow_seq_scan_);
-      current_plan = std::move(choice.plan);
-      chosen_path = choice.name;
-      rejected_paths = choice.rejected;
+    merged_schema = std::move(next);
+  }
+
+  // Validate the SELECT list and any WHERE conjunct that could not be pushed.
+  if (!stmt.is_select_all) {
+    for (const auto& item : stmt.select_list) {
+      if (!ValidateExprColumns(item.expr.get(), merged_schema, err)) {
+        return nullptr;
+      }
     }
+  }
+  for (const auto& conjunct : residual_where) {
+    if (!ValidateExprColumns(conjunct.get(), merged_schema, err)) {
+      return nullptr;
+    }
+  }
+
+  // Build the input plans (each with its pushed filter and access-path choice)
+  // and chain one NestedLoopJoin per JOIN clause.
+  AccessPathChoice first =
+      ChooseAccessPath(*inputs[0].schema, inputs[0].pushed.get(),
+                       allow_index_scan_, allow_seq_scan_);
+  std::unique_ptr<PlanNode> current_plan = std::move(first.plan);
+  std::string chosen_path = first.name;
+  std::vector<PlanAlternative> rejected_paths = first.rejected;
+  TableSchema current_schema = *inputs[0].schema;
+
+  for (size_t i = 1; i < inputs.size(); ++i) {
+    AccessPathChoice right =
+        ChooseAccessPath(*inputs[i].schema, inputs[i].pushed.get(),
+                         allow_index_scan_, allow_seq_scan_);
+    TableSchema join_schema = MergeJoinSchemas(current_schema, *inputs[i].schema);
+    current_plan = std::make_unique<NestedLoopJoinPlan>(
+        CloneExpr(stmt.joins[i - 1].on.get()),
+        std::move(current_plan),
+        std::move(right.plan),
+        join_schema);
+    current_schema = std::move(join_schema);
+  }
+
+  // Conjuncts that span several inputs stay above the join chain.
+  if (!residual_where.empty()) {
+    std::unique_ptr<Expr> pred = std::move(residual_where[0]);
+    for (size_t i = 1; i < residual_where.size(); ++i) {
+      pred = std::make_unique<BinaryExpr>(BinaryOp::AND, std::move(pred),
+                                          std::move(residual_where[i]));
+    }
+    current_plan = std::make_unique<FilterPlan>(std::move(pred), std::move(current_plan));
   }
 
   // Check if aggregation is needed (either explicit GROUP BY or aggregate functions in select list)

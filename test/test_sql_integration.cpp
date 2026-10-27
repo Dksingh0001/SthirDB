@@ -247,6 +247,30 @@ void test_multi_table_join_chain() {
   CHECK_EQ(res2.rows.size(), 1u);
   CHECK_EQ(res2.rows[0][0], "2");  // two line items of purchase 100
 
+  // Predicate pushdown: the single-table conjunct moves below the joins, so
+  // the driving input keeps its own access-path choice (an index here).
+  CHECK(engine.Execute("CREATE INDEX idx_purch_pid ON Purchases (PurchaseID);").success);
+  CHECK(engine.Execute("SET enable_seq_scan = off;").success);
+  auto plan_push = engine.Execute(
+      "EXPLAIN SELECT COUNT(*) FROM Purchases "
+      "JOIN Purchase_Line_Items ON Purchase_Line_Items.PurchaseID = Purchases.PurchaseID "
+      "WHERE Purchases.PurchaseID = 100;");
+  CHECK(plan_push.success);
+  CHECK(plan_push.rows[0][0].find("IndexScan(idx_purch_pid)") != std::string::npos);
+  CHECK(plan_push.rows[0][0].find("Chosen access path: IndexScan(idx_purch_pid)+Filter") !=
+        std::string::npos);
+  CHECK(engine.Execute("SET enable_seq_scan = on;").success);
+
+  // A conjunct spanning two inputs is NOT pushed: the filter stays above the join.
+  auto plan_residual = engine.Execute(
+      "EXPLAIN SELECT COUNT(*) FROM Purchases "
+      "JOIN Purchase_Line_Items ON Purchase_Line_Items.PurchaseID = Purchases.PurchaseID "
+      "WHERE Purchases.PurchaseID = Purchase_Line_Items.PurchaseID;");
+  CHECK(plan_residual.success);
+  const size_t filter_pos = plan_residual.rows[0][0].find("Filter  [rows=");
+  CHECK(filter_pos != std::string::npos);
+  CHECK(plan_residual.rows[0][0].find("NestedLoopJoin") > filter_pos);  // above the join
+
   CleanDir();
   test_passed("multi_table_join_chain");
 }
