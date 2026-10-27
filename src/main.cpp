@@ -15,6 +15,7 @@
 #include "storage/page.h"
 #include "storage/row.h"
 #include "workload/anomaly_injector.h"
+#include "workload/benchmark.h"
 #include "workload/retail_gen.h"
 
 namespace fs = std::filesystem;
@@ -46,7 +47,11 @@ void PrintUsage() {
       "  sthirdb inject [--constraints on|off] [--count N] [--rate 1|5|10]\n"
       "                 [--extended] [--classes name=N,...]\n"
       "                             Run the anomaly injector; prints a markdown\n"
-      "                             per-class interception table.\n",
+      "                             per-class interception table.\n"
+      "  sthirdb bench [--threads 100,300,500] [--iters N] [--warmup N]\n"
+      "                [--constraints on|off] [--frames N] [--query <sql>]\n"
+      "                             Run the concurrent reporting-query benchmark;\n"
+      "                             prints avg/P99 latency and failures.\n",
       sthir::kVersion);
 }
 
@@ -500,6 +505,92 @@ int CmdInject(int argc, char** argv) {
   return 0;
 }
 
+// bench [--threads a,b,c] [--iters N] [--warmup N] [--constraints on|off]
+//       [--frames N] [--query <sql>]
+int CmdBench(int argc, char** argv) {
+  sthir::BenchConfig cfg;
+  std::string constraints_flag = "on";
+  std::size_t frames = 8192;  // 500 threads x ~1 pin each cannot fit in 64 frames
+
+  auto next_u64 = [&](int* i, uint64_t* out) -> bool {
+    if (*i + 1 >= argc) return false;
+    errno = 0;
+    char* end = nullptr;
+    const std::string v = argv[++(*i)];
+    const unsigned long long parsed = std::strtoull(v.c_str(), &end, 10);
+    if (errno != 0 || end == v.c_str() || *end != '\0' || parsed == 0) return false;
+    *out = static_cast<uint64_t>(parsed);
+    return true;
+  };
+
+  for (int i = 2; i < argc; ++i) {
+    const std::string a = argv[i];
+    uint64_t v = 0;
+    if (a == "--threads" && i + 1 < argc) {
+      const std::string list = argv[++i];
+      cfg.thread_counts.clear();
+      size_t pos = 0;
+      while (pos < list.size()) {
+        const size_t comma = list.find(',', pos);
+        const std::string item = list.substr(pos, comma - pos);
+        const unsigned long n = std::strtoul(item.c_str(), nullptr, 10);
+        if (item.empty() || n == 0) {
+          std::fprintf(stderr, "bench: bad --threads entry '%s'\n", item.c_str());
+          return 2;
+        }
+        cfg.thread_counts.push_back(static_cast<size_t>(n));
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+      }
+    } else if (a == "--iters" && next_u64(&i, &v)) {
+      cfg.iters_per_thread = static_cast<size_t>(v);
+    } else if (a == "--warmup" && next_u64(&i, &v)) {
+      cfg.warmup = static_cast<size_t>(v);
+    } else if (a == "--frames" && next_u64(&i, &v)) {
+      frames = static_cast<std::size_t>(v);
+    } else if (a == "--constraints" && i + 1 < argc) {
+      constraints_flag = argv[++i];
+      if (constraints_flag != "on" && constraints_flag != "off") {
+        std::fprintf(stderr, "bench: --constraints expects on|off\n");
+        return 2;
+      }
+    } else if (a == "--query" && i + 1 < argc) {
+      cfg.query = argv[++i];
+    } else {
+      std::fprintf(stderr, "bench: unknown or incomplete argument '%s'\n", a.c_str());
+      return 2;
+    }
+  }
+
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "bench: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  engine.SetSessionFlag("constraints_enabled", constraints_flag);
+  engine.SetPoolFrames(frames);
+
+  sthir::BenchResult result;
+  const bool ok = sthir::RunBenchmark(
+      &engine, cfg, &result, &err, [](const sthir::BenchRow& row) {
+        std::fprintf(stderr, "bench: %zu threads done (queries=%zu failures=%zu avg=%.1f ms)\n",
+                     row.threads, row.queries, row.failures, row.avg_ms);
+      });
+  if (!ok) {
+    std::fprintf(stderr, "bench: failed: %s\n", err.c_str());
+    return 1;
+  }
+
+  const std::string mode =
+      (constraints_flag == "off" ? "unconstrained" : "constrained") +
+      std::string(", ") + std::to_string(cfg.iters_per_thread) +
+      " iteration(s) per thread, pool frames=" + std::to_string(frames);
+  std::printf("%s", sthir::FormatBenchTable(result, mode).c_str());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     PrintUsage();
@@ -587,6 +678,9 @@ int main(int argc, char** argv) {
   }
   if (cmd == "inject") {
     return CmdInject(argc, argv);
+  }
+  if (cmd == "bench") {
+    return CmdBench(argc, argv);
   }
 
   std::fprintf(stderr, "sthirdb: unknown command '%s'\n", cmd.c_str());

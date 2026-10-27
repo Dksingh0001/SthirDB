@@ -11,6 +11,7 @@
 #include "exec/execution_engine.h"
 #include "parser/parser.h"
 #include "workload/anomaly_injector.h"
+#include "workload/benchmark.h"
 #include "workload/retail_gen.h"
 
 #include "test_macros.h"
@@ -199,11 +200,74 @@ void test_injector_constrained_vs_unconstrained() {
   test_passed("injector_constrained_vs_unconstrained");
 }
 
+void test_benchmark_harness() {
+  CleanDir();
+  sthir::Catalog catalog(kCatalogPath);
+  CHECK(catalog.Load());
+  sthir::ExecutionEngine engine(&catalog, kTestDir);
+  CHECK(LoadSchema(engine));
+
+  sthir::RetailGenConfig g;
+  g.shoppers = 20;
+  g.items = 50;
+  g.purchases = 100;
+  sthir::RetailGenResult gr;
+  std::string err;
+  CHECK(sthir::GenerateRetailData(&engine, g, &gr, &err));
+
+  // Small concurrency run on the generated data: every query must succeed.
+  sthir::BenchConfig cfg;
+  cfg.thread_counts = {2, 4};
+  cfg.iters_per_thread = 2;
+  cfg.warmup = 1;
+  sthir::BenchResult res;
+  int callbacks = 0;
+  const bool ok = sthir::RunBenchmark(&engine, cfg, &res, &err,
+                                      [&callbacks](const sthir::BenchRow&) { ++callbacks; });
+  if (!ok) std::fprintf(stderr, "benchmark failed: %s\n", err.c_str());
+  CHECK(ok);
+  CHECK_EQ(res.rows.size(), 2u);
+  CHECK_EQ(res.rows[0].threads, 2u);
+  CHECK_EQ(res.rows[0].queries, 4u);   // 2 threads x 2 iters, all successful
+  CHECK_EQ(res.rows[0].failures, 0u);
+  CHECK_EQ(res.rows[1].threads, 4u);
+  CHECK_EQ(res.rows[1].queries, 8u);
+  CHECK_EQ(res.rows[1].failures, 0u);
+  CHECK_EQ(callbacks, 2);
+  CHECK(res.rows[0].avg_ms > 0.0);
+  CHECK(res.rows[0].p99_ms >= res.rows[0].min_ms);
+  CHECK(res.rows[0].max_ms >= res.rows[0].avg_ms);
+
+  const std::string table = sthir::FormatBenchTable(res, "test");
+  CHECK(table.find("| threads | queries | failures | avg ms | p99 ms |") !=
+        std::string::npos);
+  CHECK(table.find("| 4 | 8 | 0 |") != std::string::npos);
+
+  // A broken query must fail the run with a clear error, not produce numbers.
+  sthir::BenchConfig bad = cfg;
+  bad.query = "SELECT * FROM NoSuchTable";
+  sthir::BenchResult bad_res;
+  CHECK(!sthir::RunBenchmark(&engine, bad, &bad_res, &err));
+  CHECK(!err.empty());
+
+  // An empty result set is also a harness failure (guards against a filter
+  // that silently matches nothing).
+  sthir::BenchConfig empty = cfg;
+  empty.query = "SELECT * FROM Items WHERE ItemID > 999999";
+  sthir::BenchResult empty_res;
+  CHECK(!sthir::RunBenchmark(&engine, empty, &empty_res, &err));
+  CHECK(err.find("no rows") != std::string::npos);
+
+  CleanDir();
+  test_passed("benchmark_harness");
+}
+
 }  // namespace
 
 int main() {
   test_generator_determinism();
   test_generator_refuses_nonempty_db();
   test_injector_constrained_vs_unconstrained();
+  test_benchmark_harness();
   return 0;
 }

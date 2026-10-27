@@ -538,7 +538,7 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 - [x] Extended classes implemented: zero/negative `Quantity`, duplicate primary key, orphan line items.
 - [ ] Configurable injection rate (1% / 5% / 10%) implemented and at least one rate sweep reported.
 - [ ] Novelty-1 comparison evidence captured: `EXPLAIN` + pages-read for the rule-triggering queries on constrained vs unconstrained schemas.
-- [ ] Concurrent benchmark harness implemented (thread counts 100/300/500, fixed query).
+- [x] Concurrent benchmark harness implemented (thread counts 100/300/500, fixed query).
 - [ ] Latency measurement (average + P99) and failure counting collected per run.
 - [ ] `EXPLAIN` output captured for the benchmark query on both schemas.
 - [ ] Results tables produced for the report (constrained vs. unconstrained × 3 thread counts).
