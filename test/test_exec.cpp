@@ -3,6 +3,7 @@
 #include "exec/value.h"
 
 #include <filesystem>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -337,6 +338,101 @@ void test_nested_loop_join_executor() {
   test_passed("nested_loop_join_executor");
 }
 
+std::string RowKey(const sthir::Tuple& tuple) {
+  std::string s;
+  for (const auto& v : tuple.values()) s += v.ToString() + "|";
+  return s;
+}
+
+// Drives an executor to completion and returns its rows as a sorted multiset
+// of serialized strings, so two plans can be compared order-independently.
+std::vector<std::string> CollectRows(sthir::Executor& exec) {
+  std::vector<std::string> rows;
+  exec.init();
+  while (auto opt = exec.next()) rows.push_back(RowKey(*opt));
+  exec.close();
+  std::sort(rows.begin(), rows.end());
+  return rows;
+}
+
+void test_hash_join_matches_nested_loop() {
+  sthir::TableSchema s_left;
+  s_left.table_name = "L";
+  s_left.columns = {
+      {"l_id", sthir::DataType::INT, 4, false, false, false},
+      {"l_val", sthir::DataType::VARCHAR, 20, false, false, false}};
+
+  sthir::TableSchema s_right;
+  s_right.table_name = "R";
+  s_right.columns = {
+      {"r_id", sthir::DataType::INT, 4, false, false, false},
+      {"r_val", sthir::DataType::VARCHAR, 20, false, false, false}};
+
+  sthir::TableSchema joined_schema;
+  joined_schema.table_name = "Joined";
+  joined_schema.columns = {
+      {"l_id", sthir::DataType::INT, 4, false, false, false},
+      {"l_val", sthir::DataType::VARCHAR, 20, false, false, false},
+      {"r_id", sthir::DataType::INT, 4, false, false, false},
+      {"r_val", sthir::DataType::VARCHAR, 20, false, false, false}};
+
+  // Two rows share key 1 (duplicate build keys), key 2 has no match, and one
+  // row per side carries a NULL key that must never join (SQL 3VL).
+  std::vector<sthir::Tuple> left_data = {
+      sthir::Tuple({sthir::Value::MakeInt(1), sthir::Value::MakeVarchar("One")}),
+      sthir::Tuple({sthir::Value::MakeInt(2), sthir::Value::MakeVarchar("Two")}),
+      sthir::Tuple({sthir::Value::MakeInt(3), sthir::Value::MakeVarchar("Three")}),
+      sthir::Tuple({sthir::Value::MakeNull(sthir::DataType::INT), sthir::Value::MakeVarchar("Null")})
+  };
+  std::vector<sthir::Tuple> right_data = {
+      sthir::Tuple({sthir::Value::MakeInt(1), sthir::Value::MakeVarchar("Match1")}),
+      sthir::Tuple({sthir::Value::MakeInt(1), sthir::Value::MakeVarchar("Match1_dup")}),
+      sthir::Tuple({sthir::Value::MakeInt(3), sthir::Value::MakeVarchar("Match3")}),
+      sthir::Tuple({sthir::Value::MakeNull(sthir::DataType::INT), sthir::Value::MakeVarchar("NullR")})
+  };
+
+  auto make_pred = []() {
+    return std::make_unique<sthir::BinaryExpr>(
+        sthir::BinaryOp::EQ,
+        std::make_unique<sthir::ColumnRefExpr>("", "l_id"),
+        std::make_unique<sthir::ColumnRefExpr>("", "r_id"));
+  };
+
+  // Reference result from the established nested-loop executor.
+  sthir::NestedLoopJoinExecutor nlj(
+      std::make_unique<MockExecutor>(s_left, left_data),
+      std::make_unique<MockExecutor>(s_right, right_data),
+      make_pred(), joined_schema);
+  const std::vector<std::string> expected = CollectRows(nlj);
+  CHECK_EQ(expected.size(), 3u);  // NULL keys excluded on both sides
+
+  std::vector<std::unique_ptr<sthir::Expr>> left_keys;
+  left_keys.push_back(std::make_unique<sthir::ColumnRefExpr>("", "l_id"));
+  std::vector<std::unique_ptr<sthir::Expr>> right_keys;
+  right_keys.push_back(std::make_unique<sthir::ColumnRefExpr>("", "r_id"));
+
+  sthir::HashJoinExecutor build_right(
+      std::make_unique<MockExecutor>(s_left, left_data),
+      std::make_unique<MockExecutor>(s_right, right_data),
+      make_pred(), std::move(left_keys), std::move(right_keys), true, joined_schema);
+  const std::vector<std::string> got_build_right = CollectRows(build_right);
+  CHECK(got_build_right == expected);
+
+  std::vector<std::unique_ptr<sthir::Expr>> left_keys2;
+  left_keys2.push_back(std::make_unique<sthir::ColumnRefExpr>("", "l_id"));
+  std::vector<std::unique_ptr<sthir::Expr>> right_keys2;
+  right_keys2.push_back(std::make_unique<sthir::ColumnRefExpr>("", "r_id"));
+
+  sthir::HashJoinExecutor build_left(
+      std::make_unique<MockExecutor>(s_left, left_data),
+      std::make_unique<MockExecutor>(s_right, right_data),
+      make_pred(), std::move(left_keys2), std::move(right_keys2), false, joined_schema);
+  const std::vector<std::string> got_build_left = CollectRows(build_left);
+  CHECK(got_build_left == expected);
+
+  test_passed("hash_join_matches_nested_loop");
+}
+
 }  // namespace
 
 int main() {
@@ -346,5 +442,6 @@ int main() {
   test_aggregate_executor();
   test_sort_executor();
   test_nested_loop_join_executor();
+  test_hash_join_matches_nested_loop();
   return 0;
 }

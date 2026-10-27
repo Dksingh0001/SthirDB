@@ -478,6 +478,167 @@ void NestedLoopJoinExecutor::close() {
 }
 
 // -------------------------------------------------------------
+// HashJoinExecutor (Phase 7)
+// -------------------------------------------------------------
+
+HashJoinExecutor::HashJoinExecutor(std::unique_ptr<Executor> left,
+                                   std::unique_ptr<Executor> right,
+                                   std::unique_ptr<Expr> join_predicate,
+                                   std::vector<std::unique_ptr<Expr>> left_keys,
+                                   std::vector<std::unique_ptr<Expr>> right_keys,
+                                   bool build_on_right,
+                                   TableSchema schema)
+    : left_(std::move(left)),
+      right_(std::move(right)),
+      join_predicate_(std::move(join_predicate)),
+      left_keys_(std::move(left_keys)),
+      right_keys_(std::move(right_keys)),
+      build_on_right_(build_on_right),
+      schema_(std::move(schema)) {}
+
+std::vector<Value> HashJoinExecutor::MakeKey(
+    const Tuple& tuple, const std::vector<std::unique_ptr<Expr>>& keys,
+    const TableSchema& schema) {
+  std::vector<Value> key;
+  key.reserve(keys.size());
+  for (const auto& expr : keys) {
+    key.push_back(EvaluateExpr(expr.get(), tuple, schema));
+  }
+  return key;
+}
+
+size_t HashJoinExecutor::HashKey(const Key& key) {
+  size_t h = 14695981039346656037ull;  // FNV-1a offset basis
+  for (const auto& value : key) {
+    h ^= value.Hash();
+    h *= 1099511628211ull;
+  }
+  return h;
+}
+
+void HashJoinExecutor::BuildTable(Executor* side,
+                                  const std::vector<std::unique_ptr<Expr>>& keys) {
+  const TableSchema& side_schema = side->output_schema();
+  side->init();
+  while (true) {
+    auto opt = side->next();
+    if (!opt.has_value()) break;
+    Key key = MakeKey(*opt, keys, side_schema);
+    bool null_key = false;
+    for (const auto& value : key) {
+      if (value.is_null()) { null_key = true; break; }
+    }
+    if (null_key) continue;  // NULL never equals anything in a join (3VL)
+
+    auto& bucket = table_[HashKey(key)];
+    bool placed = false;
+    for (auto& entry : bucket) {
+      if (entry.first.size() != key.size()) continue;
+      bool equal = true;
+      for (size_t i = 0; i < key.size(); ++i) {
+        if (!(entry.first[i] == key[i])) { equal = false; break; }
+      }
+      if (!equal) continue;
+      entry.second.push_back(std::move(*opt));
+      placed = true;
+      break;
+    }
+    if (!placed) {
+      std::vector<Tuple> rows;
+      rows.push_back(std::move(*opt));
+      bucket.push_back({std::move(key), std::move(rows)});
+    }
+    ++build_rows_;
+  }
+  side->close();
+}
+
+void HashJoinExecutor::init() {
+  table_.clear();
+  build_rows_ = 0;
+  if (build_on_right_) {
+    BuildTable(right_.get(), right_keys_);
+    stream_left_ = true;
+    left_->init();
+  } else {
+    BuildTable(left_.get(), left_keys_);
+    stream_left_ = false;
+    right_->init();
+  }
+}
+
+std::optional<Tuple> HashJoinExecutor::next() {
+  Executor* stream = stream_left_ ? left_.get() : right_.get();
+  const auto& stream_keys = stream_left_ ? left_keys_ : right_keys_;
+  const TableSchema& stream_schema = stream->output_schema();
+
+  while (true) {
+    // Resume the candidate list of the stream tuple we are still matching.
+    if (cur_stream_.has_value()) {
+      while (cur_matches_idx_ < cur_matches_.size()) {
+        const Tuple& build_tuple = cur_matches_[cur_matches_idx_++];
+        std::vector<Value> joined_values;
+        joined_values.reserve(cur_stream_->size() + build_tuple.size());
+        if (stream_left_) {
+          for (const auto& v : cur_stream_->values()) joined_values.push_back(v);
+          for (const auto& v : build_tuple.values()) joined_values.push_back(v);
+        } else {
+          for (const auto& v : build_tuple.values()) joined_values.push_back(v);
+          for (const auto& v : cur_stream_->values()) joined_values.push_back(v);
+        }
+        Tuple joined(std::move(joined_values));
+        // Re-check the full predicate: residual conjuncts and NULL semantics
+        // stay exactly what NestedLoopJoin would evaluate.
+        if (EvaluatePredicate(join_predicate_.get(), joined, schema_) == Tribool::True) {
+          return joined;
+        }
+      }
+      cur_stream_.reset();
+      cur_matches_.clear();
+      cur_matches_idx_ = 0;
+    }
+
+    auto opt = stream->next();
+    if (!opt.has_value()) return std::nullopt;
+    cur_stream_ = std::move(*opt);
+
+    const Key key = MakeKey(*cur_stream_, stream_keys, stream_schema);
+    bool null_key = false;
+    for (const auto& value : key) {
+      if (value.is_null()) { null_key = true; break; }
+    }
+    if (null_key) {
+      cur_stream_.reset();
+      continue;
+    }
+
+    auto bucket_it = table_.find(HashKey(key));
+    if (bucket_it == table_.end()) continue;
+    for (auto& entry : bucket_it->second) {
+      if (entry.first.size() != key.size()) continue;
+      bool equal = true;
+      for (size_t i = 0; i < key.size(); ++i) {
+        if (!(entry.first[i] == key[i])) { equal = false; break; }
+      }
+      if (!equal) continue;
+      cur_matches_ = entry.second;  // candidates for this stream tuple
+      cur_matches_idx_ = 0;
+      break;
+    }
+  }
+}
+
+void HashJoinExecutor::close() {
+  table_.clear();
+  build_rows_ = 0;
+  cur_stream_.reset();
+  cur_matches_.clear();
+  cur_matches_idx_ = 0;
+  if (left_) left_->close();
+  if (right_) right_->close();
+}
+
+// -------------------------------------------------------------
 // DML operations
 // -------------------------------------------------------------
 

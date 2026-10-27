@@ -188,6 +188,61 @@ class NestedLoopJoinExecutor : public Executor {
   bool right_buffered_ = false;
 };
 
+// Equi-join: materializes the build side into a hash table keyed by the
+// extracted key expressions and probes it with the streamed side. NULL keys
+// never match (SQL 3VL), and every candidate pair has the full join predicate
+// re-checked, so results are identical to NestedLoopJoin (test-covered).
+// Added in Phase 7 for the 100k x 300k Yuan workload, which quadratic
+// nested-loop evaluation cannot finish in reasonable time.
+class HashJoinExecutor : public Executor {
+ public:
+  HashJoinExecutor(std::unique_ptr<Executor> left,
+                   std::unique_ptr<Executor> right,
+                   std::unique_ptr<Expr> join_predicate,
+                   std::vector<std::unique_ptr<Expr>> left_keys,
+                   std::vector<std::unique_ptr<Expr>> right_keys,
+                   bool build_on_right,
+                   TableSchema schema);
+
+  void init() override;
+  std::optional<Tuple> next() override;
+  void close() override;
+
+  const TableSchema& output_schema() const override { return schema_; }
+  // Rows materialized into the hash table by the last init().
+  size_t build_rows() const { return build_rows_; }
+
+ private:
+  using Key = std::vector<Value>;
+  // One hash bucket: equal keys are grouped in a small vector, so collisions
+  // between different keys stay correct.
+  using HashEntry = std::pair<Key, std::vector<Tuple>>;
+
+  static std::vector<Value> MakeKey(const Tuple& tuple,
+                                    const std::vector<std::unique_ptr<Expr>>& keys,
+                                    const TableSchema& schema);
+  static size_t HashKey(const Key& key);
+  void BuildTable(Executor* side, const std::vector<std::unique_ptr<Expr>>& keys);
+
+  std::unique_ptr<Executor> left_;
+  std::unique_ptr<Executor> right_;
+  std::unique_ptr<Expr> join_predicate_;
+  std::vector<std::unique_ptr<Expr>> left_keys_;
+  std::vector<std::unique_ptr<Expr>> right_keys_;
+  bool build_on_right_ = true;
+  TableSchema schema_;
+
+  std::unordered_map<size_t, std::vector<HashEntry>> table_;
+  bool stream_left_ = true;
+  size_t build_rows_ = 0;
+
+  // Resume state: the stream tuple currently being matched and the build-side
+  // candidates it can still pair with (one stream row may join to many rows).
+  std::optional<Tuple> cur_stream_;
+  std::vector<Tuple> cur_matches_;
+  size_t cur_matches_idx_ = 0;
+};
+
 // Forward declaration
 class RecoveryManager;
 class LockManager;

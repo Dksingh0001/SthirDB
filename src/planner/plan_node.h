@@ -21,6 +21,7 @@ enum class PlanNodeType {
   AGGREGATE,
   SORT,
   NESTED_LOOP_JOIN,
+  HASH_JOIN,
   INSERT,
   UPDATE,
   DELETE_NODE
@@ -297,6 +298,58 @@ class NestedLoopJoinPlan : public PlanNode {
   std::unique_ptr<PlanNode> left_;
   std::unique_ptr<PlanNode> right_;
   TableSchema schema_;
+};
+
+// Equi-join: hash one child and probe it with the other. `build_on_right`
+// names the child that is materialized into the hash table; the planner picks
+// the cheaper (smaller) side. `left_keys` / `right_keys` are the per-side key
+// expressions of the equalities extracted from the join predicate — every
+// candidate pair still has the full predicate re-checked, so the result set is
+// identical to NestedLoopJoin for the same inputs (verified by tests).
+//
+// Added in Phase 7: the Yuan workload joins 100k transactions to 300k line
+// items, which the quadratic NestedLoopJoin cannot execute in reasonable time.
+class HashJoinPlan : public PlanNode {
+ public:
+  HashJoinPlan(std::unique_ptr<Expr> join_predicate,
+               std::unique_ptr<PlanNode> left,
+               std::unique_ptr<PlanNode> right,
+               TableSchema schema,
+               std::vector<std::unique_ptr<Expr>> left_keys,
+               std::vector<std::unique_ptr<Expr>> right_keys,
+               bool build_on_right)
+      : join_predicate_(std::move(join_predicate)),
+        left_(std::move(left)),
+        right_(std::move(right)),
+        schema_(std::move(schema)),
+        left_keys_(std::move(left_keys)),
+        right_keys_(std::move(right_keys)),
+        build_on_right_(build_on_right) {}
+
+  PlanNodeType type() const override { return PlanNodeType::HASH_JOIN; }
+  const TableSchema& output_schema() const override { return schema_; }
+  const Expr* join_predicate() const { return join_predicate_.get(); }
+  const std::vector<std::unique_ptr<Expr>>& left_keys() const { return left_keys_; }
+  const std::vector<std::unique_ptr<Expr>>& right_keys() const { return right_keys_; }
+  bool build_on_right() const { return build_on_right_; }
+  const PlanNode* left() const { return left_.get(); }
+  const PlanNode* right() const { return right_.get(); }
+  std::unique_ptr<PlanNode>& left() { return left_; }
+  std::unique_ptr<PlanNode>& right() { return right_; }
+
+  std::vector<const PlanNode*> children() const override { return {left_.get(), right_.get()}; }
+  std::string NodeLabel() const override {
+    return std::string("HashJoin(build=") + (build_on_right_ ? "right" : "left") + ")";
+  }
+
+ private:
+  std::unique_ptr<Expr> join_predicate_;
+  std::unique_ptr<PlanNode> left_;
+  std::unique_ptr<PlanNode> right_;
+  TableSchema schema_;
+  std::vector<std::unique_ptr<Expr>> left_keys_;
+  std::vector<std::unique_ptr<Expr>> right_keys_;
+  bool build_on_right_ = true;
 };
 
 class InsertPlan : public PlanNode {

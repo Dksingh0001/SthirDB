@@ -254,6 +254,37 @@ TableSchema MergeJoinSchemas(const TableSchema& left, const TableSchema& right) 
   return merged;
 }
 
+// Collects the usable hash keys of one JOIN's ON predicate. A conjunct
+// `a = b` is usable when one side belongs to the left input chain (owner
+// index < join_index) and the other side is the input being joined (owner
+// index == join_index); the pair is then normalized to (left, right).
+// Everything else is left for NestedLoopJoin (it is re-checked at runtime).
+size_t ExtractEquiJoinKeys(const Expr& on, size_t join_index,
+                           const std::vector<JoinInput>& inputs,
+                           const std::vector<std::string>& input_names,
+                           std::vector<std::unique_ptr<Expr>>* left_keys,
+                           std::vector<std::unique_ptr<Expr>>* right_keys) {
+  std::vector<std::unique_ptr<Expr>> conjuncts;
+  SplitConjuncts(&on, &conjuncts);
+  for (auto& conjunct : conjuncts) {
+    if (conjunct->type() != ExprType::BINARY_OP) continue;
+    auto* binary = static_cast<BinaryExpr*>(conjunct.get());
+    if (binary->op() != BinaryOp::EQ) continue;
+    const int left_owner = FindOwningInput(*binary->left(), inputs, input_names);
+    const int right_owner = FindOwningInput(*binary->right(), inputs, input_names);
+    if (left_owner < 0 || right_owner < 0) continue;
+    const int join_idx = static_cast<int>(join_index);
+    if (left_owner < join_idx && right_owner == join_idx) {
+      left_keys->push_back(binary->left()->Clone());
+      right_keys->push_back(binary->right()->Clone());
+    } else if (right_owner < join_idx && left_owner == join_idx) {
+      left_keys->push_back(binary->right()->Clone());
+      right_keys->push_back(binary->left()->Clone());
+    }
+  }
+  return left_keys->size();
+}
+
 }  // namespace
 
 std::unique_ptr<PlanNode> Planner::CreatePlan(const SQLStatement& stmt, std::string* err) {
@@ -359,11 +390,35 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
         ChooseAccessPath(*inputs[i].schema, inputs[i].pushed.get(),
                          allow_index_scan_, allow_seq_scan_);
     TableSchema join_schema = MergeJoinSchemas(current_schema, *inputs[i].schema);
-    current_plan = std::make_unique<NestedLoopJoinPlan>(
-        CloneExpr(stmt.joins[i - 1].on.get()),
-        std::move(current_plan),
-        std::move(right.plan),
-        join_schema);
+    const JoinClause& clause = stmt.joins[i - 1];
+
+    // Equi-join predicates become a HashJoin (Phase 7: the Yuan workload
+    // joins 100k transactions to 300k line items, which nested loops cannot
+    // finish in reasonable time). The smaller estimated side is built.
+    std::vector<std::unique_ptr<Expr>> left_keys;
+    std::vector<std::unique_ptr<Expr>> right_keys;
+    const size_t key_count =
+        ExtractEquiJoinKeys(*clause.on, i, inputs, input_names, &left_keys, &right_keys);
+    if (key_count > 0) {
+      AnnotatePlan(current_plan.get());
+      AnnotatePlan(right.plan.get());
+      const bool build_on_right =
+          right.plan->estimated_rows() <= current_plan->estimated_rows();
+      current_plan = std::make_unique<HashJoinPlan>(
+          CloneExpr(clause.on.get()),
+          std::move(current_plan),
+          std::move(right.plan),
+          join_schema,
+          std::move(left_keys),
+          std::move(right_keys),
+          build_on_right);
+    } else {
+      current_plan = std::make_unique<NestedLoopJoinPlan>(
+          CloneExpr(clause.on.get()),
+          std::move(current_plan),
+          std::move(right.plan),
+          join_schema);
+    }
     current_schema = std::move(join_schema);
   }
 

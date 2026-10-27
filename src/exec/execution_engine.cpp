@@ -261,6 +261,20 @@ std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* pla
       return std::make_unique<NestedLoopJoinExecutor>(
           std::move(left), std::move(right), std::move(pred), j->output_schema());
     }
+    case PlanNodeType::HASH_JOIN: {
+      const auto* j = static_cast<const HashJoinPlan*>(plan);
+      auto left = BuildExecutorTree(j->left());
+      auto right = BuildExecutorTree(j->right());
+      auto pred = j->join_predicate() ? j->join_predicate()->Clone() : nullptr;
+      std::vector<std::unique_ptr<Expr>> left_keys;
+      std::vector<std::unique_ptr<Expr>> right_keys;
+      for (const auto& expr : j->left_keys()) left_keys.push_back(expr->Clone());
+      for (const auto& expr : j->right_keys()) right_keys.push_back(expr->Clone());
+      return std::make_unique<HashJoinExecutor>(
+          std::move(left), std::move(right), std::move(pred),
+          std::move(left_keys), std::move(right_keys), j->build_on_right(),
+          j->output_schema());
+    }
     default:
       break;
   }

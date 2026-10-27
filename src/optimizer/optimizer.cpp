@@ -130,6 +130,21 @@ void AnnotateRec(PlanNode* node) {
       node->set_estimates(rows, cost);
       break;
     }
+    case PlanNodeType::HASH_JOIN: {
+      auto* join = static_cast<HashJoinPlan*>(node);
+      AnnotateRec(join->left().get());
+      AnnotateRec(join->right().get());
+      const double outer_rows = join->left().get()->estimated_rows();
+      const double inner_rows = join->right().get()->estimated_rows();
+      // Same conventional 10% join selectivity as the nested-loop case. Each
+      // input is read once (already priced by the children) and the hash
+      // table lives in memory, so the join itself adds no page I/O.
+      const double rows = outer_rows * inner_rows * 0.1;
+      const double cost = join->left().get()->estimated_cost() +
+                          join->right().get()->estimated_cost();
+      node->set_estimates(rows, cost);
+      break;
+    }
     case PlanNodeType::INSERT: {
       node->set_estimates(1.0, 0.0);
       break;
