@@ -47,6 +47,33 @@ int64_t ItemPriceCents(uint32_t item_id) {
   return 100 + static_cast<int64_t>(item_id * 37u % 49900u);  // 1.00 .. 500.00
 }
 
+// Real calendar date as an int yyyymmdd: Jan 1 of `year` plus `off` days.
+// The workload query filters on PurchaseDate, so the values must be genuine
+// dates, not `20240101 + off` integer arithmetic.
+bool IsLeap(int y) {
+  return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+}
+
+int DaysInMonth(int y, int m) {
+  static const int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (m == 2 && IsLeap(y)) return 29;
+  return kDays[m - 1];
+}
+
+int DateAfter(int year, int off) {
+  int y = year;
+  int m = 1;
+  while (true) {
+    const int dim = DaysInMonth(y, m);
+    if (off < dim) return y * 10000 + m * 100 + (off + 1);
+    off -= dim;
+    if (++m > 12) {
+      m = 1;
+      ++y;
+    }
+  }
+}
+
 std::string Money(int64_t cents) {
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%lld.%02lld", static_cast<long long>(cents / 100),
@@ -215,7 +242,7 @@ bool GenerateRetailData(ExecutionEngine* engine, const RetailGenConfig& cfg,
       const char* city = ((i - 1) % 2 == 0) ? kCities[(i - 1) % 4] : kCities2[(i - 1) % 4];
       b.Add("(" + std::to_string(i) + ",'Shopper " + std::to_string(i) + "','shopper" +
             std::to_string(i) + "@retail.test','" + city + "'," +
-            std::to_string(20200101 + static_cast<int>(i % 365)) + ")");
+            std::to_string(DateAfter(2020, static_cast<int>(i % 365))) + ")");
     }
     if (!Flush(engine, &b, err)) return false;
     record("Shoppers", cfg.shoppers);
@@ -249,7 +276,7 @@ bool GenerateRetailData(ExecutionEngine* engine, const RetailGenConfig& cfg,
       Rng rng(PurchaseState(cfg.seed, pid));
       const uint32_t shopper = 1 + rng.Below(cfg.shoppers);
       const uint32_t staff = 1 + rng.Below(cfg.staff);
-      const int date = 20240101 + static_cast<int>((static_cast<uint64_t>(pid) * 7) % 730);
+      const int date = DateAfter(2024, static_cast<int>((static_cast<uint64_t>(pid) * 7) % 730));
 
       pb.Add("(" + std::to_string(pid) + "," + std::to_string(shopper) + "," +
              std::to_string(staff) + "," + std::to_string(date) + "," + Money(total) + ")");
@@ -275,7 +302,7 @@ bool GenerateRetailData(ExecutionEngine* engine, const RetailGenConfig& cfg,
     Batch ib("Invoices");
     size_t invoice_rows = 0;
     for (uint32_t pid = 1; pid <= cfg.purchases; ++pid) {
-      const int issued = 20240102 + static_cast<int>((static_cast<uint64_t>(pid) * 7) % 730);
+      const int issued = DateAfter(2024, static_cast<int>((static_cast<uint64_t>(pid) * 7) % 730) + 1);
       ib.Add("(" + std::to_string(1000000 + pid) + "," + std::to_string(pid) + "," +
              Money(totals[pid]) + "," + std::to_string(issued) + ")");
       ++invoice_rows;
