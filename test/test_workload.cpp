@@ -10,6 +10,7 @@
 #include "catalog/catalog.h"
 #include "exec/execution_engine.h"
 #include "parser/parser.h"
+#include "workload/anomaly_injector.h"
 #include "workload/retail_gen.h"
 
 #include "test_macros.h"
@@ -139,10 +140,70 @@ void test_generator_refuses_nonempty_db() {
   test_passed("generator_refuses_nonempty_db");
 }
 
+// Runs the injector on a small generated database and checks every class
+// against the given expectation (blocked everywhere vs accepted everywhere).
+void CheckInjector(bool constraints_on, bool extended, int rate, size_t expected_classes,
+                   size_t expected_injected_first_class) {
+  CleanDir();
+  sthir::Catalog catalog(kCatalogPath);
+  CHECK(catalog.Load());
+  sthir::ExecutionEngine engine(&catalog, kTestDir);
+  CHECK(LoadSchema(engine));
+
+  sthir::RetailGenConfig g;
+  g.shoppers = 20;
+  g.items = 50;
+  g.purchases = 100;
+  sthir::RetailGenResult gr;
+  std::string err;
+  CHECK(sthir::GenerateRetailData(&engine, g, &gr, &err));
+
+  engine.SetSessionFlag("constraints_enabled", constraints_on ? "on" : "off");
+
+  sthir::InjectConfig cfg;
+  cfg.extended = extended;
+  cfg.default_count = 20;
+  cfg.rate_percent = rate;
+  sthir::InjectResult res;
+  CHECK(sthir::RunAnomalyInjector(&engine, cfg, &res, &err));
+  CHECK_EQ(res.classes.size(), expected_classes);
+  CHECK_EQ(res.classes[0].injected, expected_injected_first_class);
+
+  for (const auto& c : res.classes) {
+    if (constraints_on) {
+      CHECK_EQ(c.accepted, 0u);
+      CHECK_EQ(c.blocked, c.injected);
+      CHECK_EQ(c.wrong_constraint, 0u);  // blocked by the *named* constraint
+      CHECK(!c.first_block.empty());
+    } else {
+      CHECK_EQ(c.blocked, 0u);
+      CHECK_EQ(c.accepted, c.injected);
+    }
+  }
+
+  const std::string table = sthir::FormatInjectionTable(res, "test");
+  CHECK(table.find("interception %") != std::string::npos);
+  CHECK(table.find("TOTAL") != std::string::npos);
+  const char* pct = constraints_on ? "100.0%" : "0.0%";
+  CHECK(table.find(std::string("| ") + pct) != std::string::npos);
+
+  CleanDir();
+}
+
+void test_injector_constrained_vs_unconstrained() {
+  CheckInjector(true, false, 0, 3, 20);    // default 3 classes x 20: all blocked
+  CheckInjector(false, false, 0, 3, 20);   // same statements accepted with the flag off
+  CheckInjector(true, true, 0, 8, 20);     // 8 classes incl. our own: all blocked
+  // Rate mode: count = rate% of the target table (Shoppers = 20 -> 10% = 2).
+  CheckInjector(true, false, 10, 3, 2);
+  test_passed("injector_constrained_vs_unconstrained");
+}
+
 }  // namespace
 
 int main() {
   test_generator_determinism();
   test_generator_refuses_nonempty_db();
+  test_injector_constrained_vs_unconstrained();
   return 0;
 }

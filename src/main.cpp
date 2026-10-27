@@ -14,6 +14,7 @@
 #include "storage/disk_manager.h"
 #include "storage/page.h"
 #include "storage/row.h"
+#include "workload/anomaly_injector.h"
 #include "workload/retail_gen.h"
 
 namespace fs = std::filesystem;
@@ -41,7 +42,11 @@ void PrintUsage() {
       "  sthirdb retail-gen [--shoppers N] [--items N] [--purchases N]\n"
       "                      [--lpp N] [--seed N] [--constraints on|off]\n"
       "                      [--no-index] [--no-analyze]\n"
-      "                             Deterministically load the retail dataset.\n",
+      "                             Deterministically load the retail dataset.\n"
+      "  sthirdb inject [--constraints on|off] [--count N] [--rate 1|5|10]\n"
+      "                 [--extended] [--classes name=N,...]\n"
+      "                             Run the anomaly injector; prints a markdown\n"
+      "                             per-class interception table.\n",
       sthir::kVersion);
 }
 
@@ -400,6 +405,101 @@ int CmdRetailGen(int argc, char** argv) {
   return 0;
 }
 
+// inject [--constraints on|off] [--count N] [--rate 1|5|10] [--extended]
+//        [--classes name=N,...]
+int CmdInject(int argc, char** argv) {
+  sthir::InjectConfig cfg;
+  std::string constraints_flag = "on";
+  std::string classes_label;
+
+  auto next_u64 = [&](int* i, uint64_t* out) -> bool {
+    if (*i + 1 >= argc) return false;
+    errno = 0;
+    char* end = nullptr;
+    const std::string v = argv[++(*i)];
+    const unsigned long long parsed = std::strtoull(v.c_str(), &end, 10);
+    if (errno != 0 || end == v.c_str() || *end != '\0' || parsed == 0) return false;
+    *out = static_cast<uint64_t>(parsed);
+    return true;
+  };
+
+  for (int i = 2; i < argc; ++i) {
+    const std::string a = argv[i];
+    uint64_t v = 0;
+    if (a == "--constraints" && i + 1 < argc) {
+      constraints_flag = argv[++i];
+      if (constraints_flag != "on" && constraints_flag != "off") {
+        std::fprintf(stderr, "inject: --constraints expects on|off\n");
+        return 2;
+      }
+    } else if (a == "--count" && next_u64(&i, &v)) {
+      cfg.default_count = static_cast<size_t>(v);
+    } else if (a == "--rate" && next_u64(&i, &v)) {
+      if (v != 1 && v != 5 && v != 10) {
+        std::fprintf(stderr, "inject: --rate expects 1, 5 or 10\n");
+        return 2;
+      }
+      cfg.rate_percent = static_cast<int>(v);
+    } else if (a == "--extended") {
+      cfg.extended = true;
+    } else if (a == "--classes" && i + 1 < argc) {
+      const std::string spec = argv[++i];
+      classes_label = spec;
+      size_t pos = 0;
+      while (pos < spec.size()) {
+        const size_t comma = spec.find(',', pos);
+        const std::string item = spec.substr(pos, comma - pos);
+        const size_t eq = item.find('=');
+        if (eq == std::string::npos || eq + 1 >= item.size()) {
+          std::fprintf(stderr, "inject: bad --classes entry '%s' (want name=N)\n", item.c_str());
+          return 2;
+        }
+        sthir::InjectionClassDef def;
+        def.name = item.substr(0, eq);
+        def.count = std::strtoul(item.c_str() + eq + 1, nullptr, 10);
+        cfg.classes.push_back(std::move(def));
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+      }
+    } else {
+      std::fprintf(stderr, "inject: unknown or incomplete argument '%s'\n", a.c_str());
+      return 2;
+    }
+  }
+
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "inject: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  engine.SetSessionFlag("constraints_enabled", constraints_flag);
+
+  sthir::InjectResult result;
+  if (!sthir::RunAnomalyInjector(&engine, cfg, &result, &err)) {
+    std::fprintf(stderr, "inject: failed: %s\n", err.c_str());
+    return 1;
+  }
+
+  std::string classes_desc;
+  if (!cfg.classes.empty()) {
+    classes_desc = classes_label;
+  } else {
+    classes_desc = std::to_string(cfg.extended ? 8 : 3) + " classes x " +
+                   std::to_string(cfg.default_count);
+  }
+  if (cfg.rate_percent > 0) {
+    classes_desc += " (rate " + std::to_string(cfg.rate_percent) +
+                    "% of each target table)";
+  }
+  const std::string mode =
+      (constraints_flag == "off" ? "unconstrained" : "constrained") +
+      std::string(", ") + classes_desc;
+  std::printf("%s", sthir::FormatInjectionTable(result, mode).c_str());
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     PrintUsage();
@@ -484,6 +584,9 @@ int main(int argc, char** argv) {
   }
   if (cmd == "retail-gen") {
     return CmdRetailGen(argc, argv);
+  }
+  if (cmd == "inject") {
+    return CmdInject(argc, argv);
   }
 
   std::fprintf(stderr, "sthirdb: unknown command '%s'\n", cmd.c_str());
