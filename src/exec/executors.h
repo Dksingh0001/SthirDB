@@ -246,18 +246,21 @@ class HashJoinExecutor : public Executor {
 // Forward declaration
 class RecoveryManager;
 class LockManager;
+class ConstraintChecker;
 
-// DML execution functions that directly mutate slotted-page storage
+// DML execution functions that directly mutate slotted-page storage.
+// `checker` (Phase 7) is optional: when present it validates PK/FK/UNIQUE/
+// CHECK/NOT NULL/ON DELETE rules around the write and maintains its caches.
 size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err,
                      RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
-                     LockManager* lm = nullptr);
+                     LockManager* lm = nullptr, ConstraintChecker* checker = nullptr);
 size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
                      RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
-                     LockManager* lm = nullptr);
+                     LockManager* lm = nullptr, ConstraintChecker* checker = nullptr);
 size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
                      RecoveryManager* rm = nullptr, uint32_t txn_id = 0,
-                     LockManager* lm = nullptr);
+                     LockManager* lm = nullptr, ConstraintChecker* checker = nullptr);
 
 }  // namespace sthir

@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "exec/executors.h"
+#include "exec/constraint_checker.h"
 #include "index/bplus_tree.h"
 #include "index/index_builder.h"
 #include "index/index_scan.h"
@@ -32,6 +33,26 @@ std::string FormatCost(double value) {
   char buf[32];
   std::snprintf(buf, sizeof(buf), "%.1f", value);
   return buf;
+}
+
+// Literal expression for one value (used to build cascade delete predicates).
+std::unique_ptr<Expr> ValueToExpr(const Value& v) {
+  if (v.is_null()) return LiteralExpr::MakeNull();
+  switch (v.type()) {
+    case DataType::INT:
+      return LiteralExpr::MakeInt(v.as_int());
+    case DataType::DECIMAL:
+      return LiteralExpr::MakeDecimal(v.as_decimal());
+    case DataType::VARCHAR:
+      return LiteralExpr::MakeString(v.as_string());
+  }
+  return LiteralExpr::MakeNull();
+}
+
+// `SET constraints_enabled = off` (also 0/false/no) turns the checker into a
+// no-op; that single flag is the whole constrained-vs-unconstrained switch.
+bool ConstraintsFlagOff(const std::string& value) {
+  return value == "off" || value == "0" || value == "false" || value == "no";
 }
 
 }  // namespace
@@ -108,6 +129,16 @@ ExecutionEngine::ExecutionEngine(Catalog* catalog, std::string data_dir)
   wal_ = std::make_unique<WalManager>(wal_path);
   recovery_ = std::make_unique<RecoveryManager>(wal_.get(), nullptr);
   lock_manager_ = std::make_unique<LockManager>();
+  constraint_checker_ = std::make_unique<ConstraintChecker>(
+      catalog_,
+      [this](const std::string& table, const std::vector<std::string>& columns,
+             std::unordered_map<std::string, uint32_t>* out, std::string* err) {
+        return LoadKeySet(table, columns, out, err);
+      },
+      [this](const std::string& table, const std::vector<std::string>& columns,
+             const std::vector<Value>& key, uint32_t txn_id, std::string* err) {
+        return DeleteRowsByKey(table, columns, key, txn_id, err);
+      });
 }
 
 ExecutionEngine::~ExecutionEngine() {
@@ -128,6 +159,8 @@ RecoveryReport ExecutionEngine::Recover() {
       }
     }
   }
+  // Recovery rewrites pages behind the checker's back: re-read on next check.
+  if (constraint_checker_) constraint_checker_->InvalidateAll();
   return recovery_->Recover();
 }
 
@@ -194,6 +227,83 @@ ExecutionEngine::StorageContext* ExecutionEngine::GetIndexStorage(const std::str
   auto* ptr = sc.get();
   storage_map_[key] = std::move(sc);
   return ptr;
+}
+
+bool ExecutionEngine::LoadKeySet(const std::string& table,
+                                 const std::vector<std::string>& columns,
+                                 std::unordered_map<std::string, uint32_t>* out,
+                                 std::string* err) {
+  const TableSchema* schema = catalog_ ? catalog_->GetTable(table) : nullptr;
+  if (schema == nullptr) {
+    if (err) *err = "table '" + table + "' does not exist";
+    return false;
+  }
+  StorageContext* sc = GetStorage(schema->table_name);
+  if (sc == nullptr) {
+    if (err) *err = "storage for table '" + table + "' unavailable";
+    return false;
+  }
+  // Same scan semantics as every other reader (deleted rows excluded).
+  SeqScanExecutor scan(schema->table_name, *schema, sc->bp.get(), sc->dm.get());
+  scan.init();
+  while (true) {
+    auto tuple = scan.next();
+    if (!tuple.has_value()) break;
+    std::string key;
+    if (ConstraintChecker::KeyOf(*schema, columns, *tuple, &key)) ++(*out)[std::move(key)];
+  }
+  scan.close();
+  return true;
+}
+
+size_t ExecutionEngine::DeleteRowsByKey(const std::string& table,
+                                        const std::vector<std::string>& columns,
+                                        const std::vector<Value>& key, uint32_t txn_id,
+                                        std::string* err) {
+  if (cascade_depth_ >= 8) {
+    if (err) *err = "ON DELETE CASCADE depth limit exceeded";
+    return 0;
+  }
+  const TableSchema* schema = catalog_ ? catalog_->GetTable(table) : nullptr;
+  if (schema == nullptr) {
+    if (err) *err = "cascade target table '" + table + "' does not exist";
+    return 0;
+  }
+  if (columns.size() != key.size()) {
+    if (err) *err = "cascade key arity mismatch for table '" + table + "'";
+    return 0;
+  }
+
+  // Predicate: col1 = v1 AND col2 = v2 ...
+  std::unique_ptr<Expr> pred;
+  for (size_t i = 0; i < columns.size(); ++i) {
+    std::unique_ptr<Expr> eq = std::make_unique<BinaryExpr>(
+        BinaryOp::EQ, std::make_unique<ColumnRefExpr>("", columns[i]), ValueToExpr(key[i]));
+    pred = pred ? std::make_unique<BinaryExpr>(BinaryOp::AND, std::move(pred), std::move(eq))
+                : std::move(eq);
+  }
+  auto scan = std::make_unique<SeqScanPlan>(schema->table_name, *schema);
+  auto filter = std::make_unique<FilterPlan>(std::move(pred), std::move(scan));
+  DeletePlan dp(schema->table_name, *schema, std::move(filter));
+
+  StorageContext* sc = GetStorage(schema->table_name);
+  if (sc == nullptr) {
+    if (err) *err = "storage for table '" + table + "' unavailable";
+    return 0;
+  }
+  recovery_->SetBufferPool(sc->bp.get());
+  auto exec = BuildExecutorTree(static_cast<const DeletePlan*>(&dp)->child());
+  if (!exec) {
+    if (err) *err = "failed to build cascade executor for table '" + table + "'";
+    return 0;
+  }
+
+  ++cascade_depth_;  // recursion guard for chains of cascading deletes
+  const size_t deleted = ExecuteDelete(dp, std::move(exec), sc->bp.get(), sc->dm.get(), err,
+                                       recovery_.get(), txn_id, lock_manager_.get(),
+                                       constraint_checker_.get());
+  --cascade_depth_;
+  return deleted;
 }
 
 std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* plan) {
@@ -318,6 +428,8 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
       res.error_message = err;
       return res;
     }
+    // The catalog changed: drop cached rules so the next check re-reads them.
+    if (constraint_checker_) constraint_checker_->InvalidateAll();
 
     // Initialize first page of data file
     StorageContext* sc = GetStorage(ct->table_name);
@@ -428,6 +540,8 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
         lock_manager_->ReleaseAll(tid);
         SetCurrentTxnId(0);
       }
+      // Rolled-back writes must not leave their keys in the constraint caches.
+      if (constraint_checker_) constraint_checker_->InvalidateAll();
     } else if (tx->action() == TransactionStmt::Action::CHECKPOINT) {
       recovery_->Checkpoint(true);
     }
@@ -529,6 +643,11 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
   }
 
   // 5. DML & Queries via Planner
+  // Phase 7: re-read the schema flag so `SET constraints_enabled = on|off`
+  // decides enforcement for this statement (and nothing else).
+  if (constraint_checker_) {
+    constraint_checker_->SetEnabled(!ConstraintsFlagOff(GetSessionFlag("constraints_enabled")));
+  }
   Planner planner(*catalog_, GetSessionFlag("enable_index_scan") != "off",
                   GetSessionFlag("enable_seq_scan") != "off");
   std::string plan_err;
@@ -551,8 +670,12 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     }
     std::string exec_err;
     size_t count = ExecuteInsert(*ip, sc->bp.get(), sc->dm.get(), &exec_err,
-                                 recovery_.get(), active_tid, lock_manager_.get());
+                                 recovery_.get(), active_tid, lock_manager_.get(),
+                                 constraint_checker_.get());
     if (!exec_err.empty()) {
+      // Partial writes are rolled back below; the caches must forget any key
+      // they recorded for those rows.
+      if (count > 0) constraint_checker_->InvalidateAll();
       if (auto_commit) {
         recovery_->Abort(active_tid);
         lock_manager_->ReleaseAll(active_tid);
@@ -584,8 +707,10 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     auto child_exec = BuildExecutorTree(up->child());
     std::string exec_err;
     size_t count = ExecuteUpdate(*up, std::move(child_exec), sc->bp.get(), sc->dm.get(),
-                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get());
+                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get(),
+                                 constraint_checker_.get());
     if (!exec_err.empty()) {
+      if (count > 0) constraint_checker_->InvalidateAll();
       if (auto_commit) {
         recovery_->Abort(active_tid);
         lock_manager_->ReleaseAll(active_tid);
@@ -617,8 +742,10 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
     auto child_exec = BuildExecutorTree(dp->child());
     std::string exec_err;
     size_t count = ExecuteDelete(*dp, std::move(child_exec), sc->bp.get(), sc->dm.get(),
-                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get());
+                                 &exec_err, recovery_.get(), active_tid, lock_manager_.get(),
+                                 constraint_checker_.get());
     if (!exec_err.empty()) {
+      if (count > 0) constraint_checker_->InvalidateAll();
       if (auto_commit) {
         recovery_->Abort(active_tid);
         lock_manager_->ReleaseAll(active_tid);

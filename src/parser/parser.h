@@ -19,6 +19,9 @@ class Parser {
   explicit Parser(std::vector<Token> tokens);
 
   std::unique_ptr<SQLStatement> ParseStatement();
+  // Parses a bare expression (used by the constraint checker to evaluate the
+  // CHECK expressions recorded in the catalog).
+  std::unique_ptr<Expr> ParseExpression();
   const std::string& error_message() const { return error_msg_; }
   bool has_error() const { return !error_msg_.empty(); }
 
@@ -46,7 +49,6 @@ class Parser {
   std::unique_ptr<ExplainStmt> ParseExplain();
 
   // Expression parsers
-  std::unique_ptr<Expr> ParseExpression();
   std::unique_ptr<Expr> ParseOr();
   std::unique_ptr<Expr> ParseAnd();
   std::unique_ptr<Expr> ParseNot();

@@ -526,14 +526,14 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 - [ ] 3NF justification written: FDs per table and an argument each that no non-trivial FD violates 3NF.
 - [ ] `CategoryName` denormalization trade-off documented (anomaly permitted, and why it is accepted).
 - [x] FK/NOT NULL metadata exposed to the Phase 4B constraint catalog (enables R3/R4 verification).
-- [ ] Constraint enforcement implemented in the engine (PK, FK, UNIQUE, CHECK, ON DELETE RESTRICT/CASCADE).
-- [ ] Constrained vs. unconstrained toggle implemented (single schema flag).
+- [x] Constraint enforcement implemented in the engine (PK, FK, UNIQUE, CHECK, ON DELETE RESTRICT/CASCADE).
+- [x] Constrained vs. unconstrained toggle implemented (single schema flag).
 - [ ] Data generator produces the target scale (100k / 300k / 5k / 1k) deterministically (fixed seed).
 - [ ] Anomaly injector implemented with configurable class counts (default 3 × 50).
 - [ ] Per-class interception-rate report generated for constrained and unconstrained runs.
-- [ ] `ON DELETE RESTRICT` behaviour verified: deleting a shopper with purchases is rejected.
-- [ ] `CHECK (StockLevel >= 0)` verified: negative stock update is rejected.
-- [ ] `UNIQUE (Email)` verified: duplicate registration is rejected.
+- [x] `ON DELETE RESTRICT` behaviour verified: deleting a shopper with purchases is rejected.
+- [x] `CHECK (StockLevel >= 0)` verified: negative stock update is rejected.
+- [x] `UNIQUE (Email)` verified: duplicate registration is rejected.
 - [ ] At least one **extra** anomaly class of your own added and reported.
 - [ ] Extended classes implemented: zero/negative `Quantity`, duplicate primary key, orphan line items.
 - [ ] Configurable injection rate (1% / 5% / 10%) implemented and at least one rate sweep reported.

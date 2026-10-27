@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -68,6 +69,16 @@ class ExecutionEngine {
   StorageContext* GetIndexStorage(const std::string& path);
   std::unique_ptr<Executor> BuildExecutorTree(const PlanNode* plan);
 
+  // Phase 7: constraint-checker services.
+  // Loads every composite key of (table, columns) with one scan, counting
+  // occurrences (FK child sets are multisets).
+  bool LoadKeySet(const std::string& table, const std::vector<std::string>& columns,
+                  std::unordered_map<std::string, uint32_t>* out, std::string* err);
+  // ON DELETE CASCADE: deletes the rows whose columns equal `key`, one level
+  // deep (further levels recurse with cascade_depth_ as the guard).
+  size_t DeleteRowsByKey(const std::string& table, const std::vector<std::string>& columns,
+                         const std::vector<Value>& key, uint32_t txn_id, std::string* err);
+
   uint32_t GetCurrentTxnId() const;
   void SetCurrentTxnId(uint32_t tid);
 
@@ -81,6 +92,10 @@ class ExecutionEngine {
   std::unique_ptr<class WalManager> wal_;
   std::unique_ptr<class RecoveryManager> recovery_;
   std::unique_ptr<class LockManager> lock_manager_;
+  // Phase 7: PK/FK/UNIQUE/CHECK/NOT NULL enforcement behind the
+  // `constraints_enabled` session flag.
+  std::unique_ptr<class ConstraintChecker> constraint_checker_;
+  int cascade_depth_ = 0;  // ON DELETE CASCADE recursion guard
 };
 
 }  // namespace sthir

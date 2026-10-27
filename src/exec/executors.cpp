@@ -1,4 +1,5 @@
 #include "exec/executors.h"
+#include "exec/constraint_checker.h"
 
 #include <algorithm>
 #include <iostream>
@@ -643,7 +644,8 @@ void HashJoinExecutor::close() {
 // -------------------------------------------------------------
 
 size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm,
+                     ConstraintChecker* checker) {
   if (!bp || !dm) {
     if (err) *err = "storage uninitialized";
     return 0;
@@ -651,23 +653,10 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
 
   const TableSchema& schema = plan.output_schema();
 
-  uint32_t cur_pid = 0;
-  if (dm->num_pages() == 0) {
-    cur_pid = dm->allocate_page();
-  } else {
-    cur_pid = dm->num_pages() - 1;
-  }
-
-  Page* page = bp->fetch_page(cur_pid);
-  if (!page) {
-    if (err) *err = "buffer pool exhausted";
-    return 0;
-  }
-  if (page->free_space_ptr() < kPageHeaderSize) page->Reset(cur_pid);
-
-  size_t inserted_count = 0;
+  // Phase 1: materialize every tuple from the VALUES matrix.
+  std::vector<Tuple> tuples;
+  tuples.reserve(plan.values_matrix().size());
   for (const auto& val_row : plan.values_matrix()) {
-    // Construct tuple
     std::vector<Value> tuple_vals;
     tuple_vals.reserve(schema.columns.size());
 
@@ -690,7 +679,29 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
       }
     }
 
-    Tuple tuple(std::move(tuple_vals));
+    tuples.emplace_back(std::move(tuple_vals));
+  }
+
+  // Phase 2 (Phase 7): every constraint check runs before the first write, so
+  // a rejected statement never touches the table — no undo is ever needed.
+  if (checker != nullptr && !checker->CheckInsert(schema, tuples, err)) return 0;
+
+  uint32_t cur_pid = 0;
+  if (dm->num_pages() == 0) {
+    cur_pid = dm->allocate_page();
+  } else {
+    cur_pid = dm->num_pages() - 1;
+  }
+
+  Page* page = bp->fetch_page(cur_pid);
+  if (!page) {
+    if (err) *err = "buffer pool exhausted";
+    return 0;
+  }
+  if (page->free_space_ptr() < kPageHeaderSize) page->Reset(cur_pid);
+
+  size_t inserted_count = 0;
+  for (Tuple& tuple : tuples) {
     std::vector<char> bytes = tuple.Serialize(schema);
 
     int slot = page->InsertTuple(bytes.data(), static_cast<uint16_t>(bytes.size()));
@@ -726,6 +737,7 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
       uint64_t lsn = rm->LogUpdate(txn_id, cur_pid, static_cast<uint16_t>(slot), 0, {}, bytes);
       page->set_page_lsn(lsn);
     }
+    if (checker != nullptr) checker->RecordInsert(schema, tuple);
     ++inserted_count;
   }
 
@@ -738,7 +750,8 @@ size_t ExecuteInsert(const InsertPlan& plan, BufferPool* bp, DiskManager* dm, st
 
 size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* dm, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm,
+                     ConstraintChecker* checker) {
   if (!child || !bp || !dm) {
     if (err) *err = "storage or child plan uninitialized";
     return 0;
@@ -797,6 +810,17 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
     }
 
     Tuple updated_tuple(std::move(new_vals));
+
+    // Phase 7: NOT NULL / CHECK / changed-key uniqueness / changed-FK
+    // existence on the resulting row. Nothing has been written for this row
+    // yet, so an unpin(false) here leaves the page untouched; rows written
+    // earlier in this statement are undone when the caller aborts.
+    if (checker != nullptr &&
+        !checker->CheckUpdate(schema, current_tuple, updated_tuple, err)) {
+      bp->unpin_page(tuple.rid().page_id, false);
+      return updated_count;
+    }
+
     std::vector<char> bytes = updated_tuple.Serialize(schema);
 
     bool written = p->WriteTupleAt(tuple.rid().slot_id, bytes.data(), static_cast<uint16_t>(bytes.size()));
@@ -857,6 +881,7 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
       }
     }
 
+    if (checker != nullptr) checker->RecordUpdate(schema, current_tuple, updated_tuple);
     ++updated_count;
   }
 
@@ -868,7 +893,8 @@ size_t ExecuteUpdate(const UpdatePlan& plan, std::unique_ptr<Executor> child,
 
 size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
                      BufferPool* bp, DiskManager* /*dm*/, std::string* err,
-                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm) {
+                     RecoveryManager* rm, uint32_t txn_id, LockManager* lm,
+                     ConstraintChecker* checker) {
   if (!child || !bp) {
     if (err) *err = "storage or child plan uninitialized";
     return 0;
@@ -885,6 +911,34 @@ size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
   }
   child->close();
 
+  // Phase 7: ON DELETE RESTRICT — read every victim and reject the statement
+  // before the first write, so a restricted delete leaves the table untouched.
+  // `victims[i]` mirrors rids_to_delete[i]; an empty tuple marks a row that
+  // could not be read (the write loop skips it anyway).
+  const TableSchema& schema = plan.output_schema();
+  std::vector<Tuple> victims;
+  if (checker != nullptr && !rids_to_delete.empty()) {
+    victims.reserve(rids_to_delete.size());
+    for (const auto& rid : rids_to_delete) {
+      Page* p = bp->fetch_page(rid.page_id);
+      if (!p) {
+        victims.emplace_back();
+        continue;
+      }
+      Tuple victim;
+      const int len = p->tuple_length(rid.slot_id);
+      if (len > 0) {
+        std::vector<char> buf(static_cast<size_t>(len));
+        p->ReadTuple(rid.slot_id, buf.data());
+        victim = Tuple::Deserialize(buf.data(), static_cast<uint16_t>(len), schema);
+        victim.set_rid(rid);
+      }
+      bp->unpin_page(rid.page_id, false);
+      if (victim.size() > 0 && !checker->CheckDelete(schema, victim, err)) return 0;
+      victims.push_back(std::move(victim));
+    }
+  }
+
   if (lm && txn_id != 0) {
     if (!lm->AcquireExclusiveBatch(txn_id, plan.table_name(), rids_to_delete)) {
       if (err) *err = "lock acquisition timeout";
@@ -893,7 +947,8 @@ size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
   }
 
   size_t deleted_count = 0;
-  for (const auto& rid : rids_to_delete) {
+  for (size_t i = 0; i < rids_to_delete.size(); ++i) {
+    const RID& rid = rids_to_delete[i];
     Page* p = bp->fetch_page(rid.page_id);
     if (!p) continue;
 
@@ -912,6 +967,17 @@ size_t ExecuteDelete(const DeletePlan& plan, std::unique_ptr<Executor> child,
       }
       ++deleted_count;
       bp->unpin_page(rid.page_id, true);
+
+      if (checker != nullptr && i < victims.size() && victims[i].size() > 0) {
+        checker->RecordDelete(schema, victims[i]);
+        // ON DELETE CASCADE: remove the referencing child rows in the same
+        // transaction (recursive; the engine guards the depth).
+        std::string cascade_err;
+        if (!checker->CascadeDelete(schema, victims[i], txn_id, &cascade_err)) {
+          if (err) *err = cascade_err;
+          return deleted_count;
+        }
+      }
     } else {
       bp->unpin_page(rid.page_id, false);
     }
