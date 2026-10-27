@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "catalog/catalog.h"
 #include "common/config.h"
@@ -32,7 +33,9 @@ void PrintUsage() {
       "  sthirdb init_schema         Create ./data/retail and the Items table file.\n"
       "  sthirdb load_data --rows N  Bulk-insert N rows into Items.\n"
       "  sthirdb count               Count live rows in Items.\n"
-      "  sthirdb recover             Run ARIES restart recovery over the WAL.\n",
+      "  sthirdb recover             Run ARIES restart recovery over the WAL.\n"
+      "  sthirdb sql [--constraints on|off] <file>\n"
+      "                             Execute every statement in <file> in order.\n",
       sthir::kVersion);
 }
 
@@ -252,6 +255,112 @@ bool ParseRowsArg(int argc, char** argv, size_t* out_rows) {
   return true;
 }
 
+// Splits a SQL script into statements on ';', honouring single-quoted string
+// literals and dropping `--` line comments. Returns the statement texts.
+std::vector<std::string> SplitSqlScript(const std::string& script) {
+  std::vector<std::string> statements;
+  std::string current;
+  bool in_string = false;
+  bool in_comment = false;
+  for (size_t i = 0; i < script.size(); ++i) {
+    const char c = script[i];
+    if (in_comment) {
+      if (c == '\n') {
+        in_comment = false;
+        current.push_back(' ');
+      }
+      continue;
+    }
+    if (!in_string && c == '-' && i + 1 < script.size() && script[i + 1] == '-') {
+      in_comment = true;
+      ++i;
+      continue;
+    }
+    if (c == '\'') {
+      in_string = !in_string;
+      current.push_back(c);
+      continue;
+    }
+    if (c == ';' && !in_string) {
+      statements.push_back(current);
+      current.clear();
+      continue;
+    }
+    current.push_back(c);
+  }
+  if (!current.empty()) statements.push_back(current);
+
+  // Drop statements that are empty or only whitespace/comments.
+  std::vector<std::string> nonempty;
+  for (auto& s : statements) {
+    const size_t first = s.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos) nonempty.push_back(s);
+  }
+  return nonempty;
+}
+
+// sql [--constraints on|off] <file>: run a whole SQL script in one session.
+int CmdSql(int argc, char** argv) {
+  std::string constraints_flag = "";
+  const char* path = nullptr;
+  if (argc == 3) {
+    path = argv[2];
+  } else if (argc == 5 && std::string(argv[2]) == "--constraints") {
+    constraints_flag = argv[3];
+    path = argv[4];
+  }
+  if (path == nullptr || (constraints_flag != "" && constraints_flag != "on" &&
+                          constraints_flag != "off")) {
+    std::fprintf(stderr, "sql: expected 'sthirdb sql [--constraints on|off] <file>'\n");
+    return 2;
+  }
+
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(path, ec);
+  if (ec) {
+    std::fprintf(stderr, "sql: cannot read %s: %s\n", path, ec.message().c_str());
+    return 1;
+  }
+  std::string script(size, '\0');
+  {
+    std::FILE* f = std::fopen(path, "rb");
+    if (f == nullptr) {
+      std::fprintf(stderr, "sql: cannot open %s\n", path);
+      return 1;
+    }
+    const size_t got = std::fread(script.data(), 1, size, f);
+    std::fclose(f);
+    script.resize(got);
+  }
+
+  sthir::Catalog catalog(sthir::kCatalogPath);
+  std::string err;
+  if (!catalog.Load(&err)) {
+    std::fprintf(stderr, "sql: cannot load catalog: %s\n", err.c_str());
+    return 1;
+  }
+  sthir::ExecutionEngine engine(&catalog, sthir::kDataDir);
+  if (!constraints_flag.empty()) {
+    engine.SetSessionFlag("constraints_enabled", constraints_flag);
+  }
+
+  const std::vector<std::string> statements = SplitSqlScript(script);
+  size_t executed = 0;
+  for (const auto& stmt : statements) {
+    auto res = engine.Execute(stmt);
+    if (!res.success) {
+      std::fprintf(stderr, "sql: statement %zu failed: %s\n  in: %s\n", executed + 1,
+                   res.error_message.c_str(), stmt.c_str());
+      return 1;
+    }
+    ++executed;
+  }
+  std::printf("sql: %zu statement(s) executed from %s%s%s\n", executed, path,
+              constraints_flag.empty() ? "" : " (constraints_enabled=",
+              constraints_flag.empty() ? "" : (constraints_flag + ")").c_str());
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -332,6 +441,9 @@ int main(int argc, char** argv) {
     std::printf("  Loser txns       : %zu\n", report.loser_txns.size());
     std::printf("  Recovery time    : %.2f ms\n", report.recovery_time_ms);
     return 0;
+  }
+  if (cmd == "sql") {
+    return CmdSql(argc, argv);
   }
 
   std::fprintf(stderr, "sthirdb: unknown command '%s'\n", cmd.c_str());
