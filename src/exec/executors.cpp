@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include "recovery/recovery_manager.h"
 #include "concurrency/lock_manager.h"
 
@@ -40,7 +41,13 @@ std::optional<Tuple> SeqScanExecutor::next() {
   while (cur_page_id_ < total_pages_) {
     if (cur_page_ == nullptr) {
       cur_page_ = bp_->fetch_page(cur_page_id_);
-      if (cur_page_ == nullptr) return std::nullopt;
+      if (cur_page_ == nullptr) {
+        // Every frame pinned: ending the scan here would silently truncate the
+        // result (a wrong answer). Surface it instead; ExecuteStatement turns
+        // the exception into a failed ExecutionResult.
+        throw std::runtime_error("buffer pool exhausted while scanning table '" +
+                                 table_name_ + "'");
+      }
       cur_slot_ = 0;
     }
 
@@ -111,7 +118,10 @@ std::optional<Tuple> IndexScanExecutor::next() {
     if (rid.page_id >= dm_->num_pages()) continue;  // table replaced under the index
 
     Page* page = bp_->fetch_page(rid.page_id);
-    if (page == nullptr) return std::nullopt;
+    if (page == nullptr) {
+      throw std::runtime_error("buffer pool exhausted while scanning table '" +
+                               table_name_ + "'");
+    }
     if (rid.slot_id >= page->slot_count() || !page->tuple_alive(rid.slot_id)) {
       bp_->unpin_page(rid.page_id, false);
       continue;  // tombstoned after the index was built

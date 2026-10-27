@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "catalog/catalog.h"
+#include "common/config.h"
 #include "exec/executor.h"
 #include "exec/value.h"
 #include "planner/plan_node.h"
@@ -57,6 +58,12 @@ class ExecutionEngine {
   void SetSessionFlag(const std::string& key, const std::string& val);
   std::string GetSessionFlag(const std::string& key) const;
 
+  // Buffer-pool frames per table/index file (default kDefaultPoolFrames = 64).
+  // Must be called before the first statement: concurrency runs (Phase 7C) raise
+  // it so 500 threads' pins fit; 64 frames silently cannot.
+  void SetPoolFrames(std::size_t frames);
+  std::size_t pool_frames() const { return pool_frames_; }
+
   RecoveryReport Recover();
   class WalManager* wal_manager() const { return wal_.get(); }
   class RecoveryManager* recovery_manager() const { return recovery_.get(); }
@@ -69,7 +76,10 @@ class ExecutionEngine {
   };
 
   // Parses, plans and runs one statement (without the pages-read snapshot).
+  // Turns executor exceptions (e.g. buffer-pool exhaustion) into a failed
+  // ExecutionResult instead of letting them escape or truncate a result.
   ExecutionResult ExecuteStatement(const std::string& sql);
+  ExecutionResult ExecuteInner(const std::string& sql);
 
   StorageContext* GetStorage(const std::string& table_name);
   // Opens (once) the storage for an index file, keyed by its path.
@@ -92,6 +102,7 @@ class ExecutionEngine {
   mutable std::mutex engine_latch_;
   Catalog* catalog_;
   std::string data_dir_;
+  std::size_t pool_frames_ = kDefaultPoolFrames;
   std::unordered_map<std::string, std::unique_ptr<StorageContext>> storage_map_;
   std::unordered_map<std::string, std::string> session_flags_;
   std::unordered_map<std::thread::id, uint32_t> thread_txns_;

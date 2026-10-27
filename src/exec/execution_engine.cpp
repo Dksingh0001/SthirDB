@@ -174,6 +174,18 @@ std::string ExecutionEngine::GetSessionFlag(const std::string& key) const {
   return "";
 }
 
+void ExecutionEngine::SetPoolFrames(std::size_t frames) {
+  if (frames == 0) return;
+  std::lock_guard<std::mutex> lock(engine_latch_);
+  if (!storage_map_.empty()) {
+    // Storage contexts bake the frame count in at creation time; changing it
+    // mid-flight would leave mixed pools. Callers set it before the first
+    // statement (the benchmark does).
+    return;
+  }
+  pool_frames_ = frames;
+}
+
 uint32_t ExecutionEngine::GetCurrentTxnId() const {
   std::lock_guard<std::mutex> lock(engine_latch_);
   auto it = thread_txns_.find(std::this_thread::get_id());
@@ -201,7 +213,7 @@ ExecutionEngine::StorageContext* ExecutionEngine::GetStorage(const std::string& 
 
   auto sc = std::make_unique<StorageContext>();
   sc->dm = std::make_unique<DiskManager>(file_path);
-  sc->bp = std::make_unique<BufferPool>(kDefaultPoolFrames, sc->dm.get());
+  sc->bp = std::make_unique<BufferPool>(pool_frames_, sc->dm.get());
   if (wal_) {
     sc->bp->set_wal_manager(wal_.get());
   }
@@ -222,7 +234,7 @@ ExecutionEngine::StorageContext* ExecutionEngine::GetIndexStorage(const std::str
 
   auto sc = std::make_unique<StorageContext>();
   sc->dm = std::make_unique<DiskManager>(path);
-  sc->bp = std::make_unique<BufferPool>(kDefaultPoolFrames, sc->dm.get());
+  sc->bp = std::make_unique<BufferPool>(pool_frames_, sc->dm.get());
 
   auto* ptr = sc.get();
   storage_map_[key] = std::move(sc);
@@ -399,6 +411,22 @@ ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
 }
 
 ExecutionResult ExecutionEngine::ExecuteStatement(const std::string& sql) {
+  try {
+    return ExecuteInner(sql);
+  } catch (const std::exception& e) {
+    ExecutionResult res;
+    res.success = false;
+    res.error_message = e.what();
+    return res;
+  } catch (...) {
+    ExecutionResult res;
+    res.success = false;
+    res.error_message = "unknown error while executing statement";
+    return res;
+  }
+}
+
+ExecutionResult ExecutionEngine::ExecuteInner(const std::string& sql) {
   ExecutionResult res;
 
   Lexer lexer(sql);
