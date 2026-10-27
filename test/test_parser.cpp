@@ -133,9 +133,9 @@ void test_parse_select_aggregates_group_order_join() {
   auto* sel = dynamic_cast<sthir::SelectStmt*>(stmt.get());
   CHECK(sel != nullptr);
   CHECK_EQ(sel->select_list.size(), 3u);
-  CHECK(sel->has_join);
-  CHECK_EQ(sel->join_table, "Departments");
-  CHECK(sel->join_predicate != nullptr);
+  CHECK_EQ(sel->joins.size(), 1u);
+  CHECK_EQ(sel->joins[0].table_name, "Departments");
+  CHECK(sel->joins[0].on != nullptr);
   CHECK(sel->where_clause != nullptr);
   CHECK_EQ(sel->group_by_columns.size(), 1u);
   CHECK_EQ(sel->group_by_columns[0], "Dept");
@@ -246,6 +246,41 @@ void test_parse_errors() {
   test_passed("parse_errors");
 }
 
+void test_parse_chained_joins() {
+  std::string err;
+  std::string sql =
+      "SELECT Items.CategoryName, COUNT(*) "
+      "FROM Purchases "
+      "JOIN Purchase_Line_Items ON Purchase_Line_Items.PurchaseID = Purchases.PurchaseID "
+      "JOIN Items ON Items.ItemID = Purchase_Line_Items.ItemID "
+      "JOIN Invoices ON Invoices.PurchaseID = Purchases.PurchaseID "
+      "GROUP BY Items.CategoryName;";
+  auto stmt = ParseSQL(sql, &err);
+  CHECK(stmt != nullptr);
+  auto* sel = dynamic_cast<sthir::SelectStmt*>(stmt.get());
+  CHECK(sel != nullptr);
+  CHECK_EQ(sel->from_table, "Purchases");
+  CHECK_EQ(sel->joins.size(), 3u);
+  CHECK_EQ(sel->joins[0].table_name, "Purchase_Line_Items");
+  CHECK_EQ(sel->joins[1].table_name, "Items");
+  CHECK_EQ(sel->joins[2].table_name, "Invoices");
+  for (const auto& clause : sel->joins) CHECK(clause.on != nullptr);
+  CHECK_EQ(sel->group_by_columns.size(), 1u);
+
+  // The legacy `inner join` spelling still parses, as do zero joins.
+  auto stmt2 = ParseSQL("SELECT * FROM A inner JOIN B ON A.id = B.id;", &err);
+  CHECK(stmt2 != nullptr);
+  auto* sel2 = dynamic_cast<sthir::SelectStmt*>(stmt2.get());
+  CHECK_EQ(sel2->joins.size(), 1u);
+  CHECK_EQ(sel2->joins[0].table_name, "B");
+
+  auto stmt3 = ParseSQL("SELECT * FROM A;", &err);
+  auto* sel3 = dynamic_cast<sthir::SelectStmt*>(stmt3.get());
+  CHECK_EQ(sel3->joins.size(), 0u);
+
+  test_passed("parse_chained_joins");
+}
+
 }  // namespace
 
 int main() {
@@ -255,6 +290,7 @@ int main() {
   test_parse_insert();
   test_parse_select();
   test_parse_select_aggregates_group_order_join();
+  test_parse_chained_joins();
   test_parse_update_delete();
   test_parse_transactions_and_utils();
   test_parse_precedence_and_parentheses();

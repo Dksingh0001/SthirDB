@@ -237,6 +237,13 @@ struct SelectItem {
   bool is_star = false;
 };
 
+// One `JOIN <table> ON <predicate>` clause. A SELECT chains several of them
+// (Phase 7): `FROM a JOIN b ON ... JOIN c ON ... JOIN d ON ...`.
+struct JoinClause {
+  std::string table_name;
+  std::unique_ptr<Expr> on;
+};
+
 struct OrderByItem {
   std::string column_name;
   bool is_desc = false;
@@ -250,9 +257,7 @@ class SelectStmt : public SQLStatement {
   bool is_select_all = false;
   std::string from_table;
 
-  bool has_join = false;
-  std::string join_table;
-  std::unique_ptr<Expr> join_predicate;
+  std::vector<JoinClause> joins;
 
   std::unique_ptr<Expr> where_clause;
   std::vector<std::string> group_by_columns;

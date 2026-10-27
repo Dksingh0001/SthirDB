@@ -180,11 +180,12 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
   std::vector<PlanAlternative> rejected_paths;
   std::string chosen_path = "SeqScan";
 
-  // Handle JOIN
-  if (stmt.has_join) {
-    const TableSchema* join_schema = catalog_.GetTable(stmt.join_table);
+  // Handle JOIN chains: one NestedLoopJoin per JOIN clause, merging schemas
+  // left to right (Phase 7 needs the four-table Yuan workload query).
+  for (const auto& clause : stmt.joins) {
+    const TableSchema* join_schema = catalog_.GetTable(clause.table_name);
     if (!join_schema) {
-      if (err) *err = "joined table '" + stmt.join_table + "' does not exist";
+      if (err) *err = "joined table '" + clause.table_name + "' does not exist";
       return nullptr;
     }
     auto right_plan = std::make_unique<SeqScanPlan>(join_schema->table_name, *join_schema);
@@ -205,14 +206,14 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
       merged_schema.columns.push_back(col);
     }
 
-    if (stmt.join_predicate) {
-      if (!ValidateExprColumns(stmt.join_predicate.get(), merged_schema, err)) {
+    if (clause.on) {
+      if (!ValidateExprColumns(clause.on.get(), merged_schema, err)) {
         return nullptr;
       }
     }
 
     current_plan = std::make_unique<NestedLoopJoinPlan>(
-        CloneExpr(stmt.join_predicate.get()),
+        CloneExpr(clause.on.get()),
         std::move(current_plan),
         std::move(right_plan),
         merged_schema);
@@ -233,7 +234,7 @@ std::unique_ptr<PlanNode> Planner::PlanSelect(const SelectStmt& stmt, std::strin
     if (!ValidateExprColumns(stmt.where_clause.get(), current_schema, err)) {
       return nullptr;
     }
-    if (stmt.has_join) {
+    if (!stmt.joins.empty()) {
       // The join's output schema only exists after the join, so the filter
       // stays above it; access-path choice is single-table only in Phase 4.
       current_plan = std::make_unique<FilterPlan>(

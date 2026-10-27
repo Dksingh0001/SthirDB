@@ -203,11 +203,60 @@ void test_error_handling() {
   test_passed("error_handling");
 }
 
+void test_multi_table_join_chain() {
+  CleanDir();
+  sthir::Catalog catalog(kTestCatalogPath);
+  catalog.Load();
+  sthir::ExecutionEngine engine(&catalog, kTestDir);
+
+  CHECK(engine.Execute("CREATE TABLE Purchases (PurchaseID INT, ShopperID INT);").success);
+  CHECK(engine.Execute("CREATE TABLE Purchase_Line_Items (LineItemID INT, PurchaseID INT, ItemID INT, Quantity INT);").success);
+  CHECK(engine.Execute("CREATE TABLE Items (ItemID INT, CategoryName VARCHAR(30), RetailPrice DECIMAL(10,2));").success);
+  CHECK(engine.Execute("CREATE TABLE Invoices (InvoiceID INT, PurchaseID INT, Total DECIMAL(10,2));").success);
+
+  CHECK(engine.Execute("INSERT INTO Items VALUES (1, 'Books', 10.00), (2, 'Games', 50.00), (3, 'Books', 20.00);").success);
+  CHECK(engine.Execute("INSERT INTO Purchases VALUES (100, 1), (101, 2);").success);
+  CHECK(engine.Execute("INSERT INTO Purchase_Line_Items VALUES (1, 100, 1, 2), (2, 100, 2, 1), (3, 101, 1, 1), (4, 101, 3, 3);").success);
+  CHECK(engine.Execute("INSERT INTO Invoices VALUES (900, 100, 70.00), (901, 101, 70.00);").success);
+
+  // Four-table reporting query: three chained JOIN clauses.
+  auto res = engine.Execute(
+      "SELECT Items.CategoryName, COUNT(*), SUM(Quantity) "
+      "FROM Purchases "
+      "JOIN Purchase_Line_Items ON Purchase_Line_Items.PurchaseID = Purchases.PurchaseID "
+      "JOIN Items ON Items.ItemID = Purchase_Line_Items.ItemID "
+      "JOIN Invoices ON Invoices.PurchaseID = Purchases.PurchaseID "
+      "GROUP BY Items.CategoryName "
+      "ORDER BY Items.CategoryName;");
+  CHECK(res.success);
+  CHECK_EQ(res.rows.size(), 2u);
+  CHECK_EQ(res.rows[0][0], "Books");
+  CHECK_EQ(res.rows[0][1], "3");  // line items 1, 3, 4
+  CHECK_EQ(res.rows[0][2], "6.00");  // quantities 2 + 1 + 3
+  CHECK_EQ(res.rows[1][0], "Games");
+  CHECK_EQ(res.rows[1][1], "1");
+  CHECK_EQ(res.rows[1][2], "1.00");
+
+  // A join chain with a WHERE clause that references two tables.
+  auto res2 = engine.Execute(
+      "SELECT COUNT(*) FROM Purchases "
+      "JOIN Purchase_Line_Items ON Purchase_Line_Items.PurchaseID = Purchases.PurchaseID "
+      "JOIN Invoices ON Invoices.PurchaseID = Purchases.PurchaseID "
+      "WHERE Purchases.PurchaseID = 100;");
+  CHECK(res2.success);
+  CHECK_EQ(res2.rows.size(), 1u);
+  CHECK_EQ(res2.rows[0][0], "2");  // two line items of purchase 100
+
+  CleanDir();
+  test_passed("multi_table_join_chain");
+}
+
 }  // namespace
 
 int main() {
   test_acceptance_examples();
   test_joins_aggregates_and_nulls();
+  test_multi_table_join_chain();
   test_persistence_across_restart();
   test_transactions_and_utils();
   test_error_handling();

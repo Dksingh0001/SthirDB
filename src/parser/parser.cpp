@@ -319,6 +319,12 @@ std::unique_ptr<InsertStmt> Parser::ParseInsert() {
   return stmt;
 }
 
+bool Parser::CheckInnerJoin() const {
+  if (!Check(TokenType::IDENTIFIER) || Peek().lexeme != "inner") return false;
+  const size_t next = current_ + 1;
+  return next < tokens_.size() && tokens_[next].type == TokenType::JOIN;
+}
+
 std::unique_ptr<SelectStmt> Parser::ParseSelect() {
   auto stmt = std::make_unique<SelectStmt>();
 
@@ -350,14 +356,23 @@ std::unique_ptr<SelectStmt> Parser::ParseSelect() {
   if (!Expect(TokenType::IDENTIFIER, "expected table name after 'FROM'")) return nullptr;
   stmt->from_table = Previous().lexeme;
 
-  // Optional JOIN
-  if (Match(TokenType::JOIN) || (Match(TokenType::IDENTIFIER) && Previous().lexeme == "inner" && Match(TokenType::JOIN))) {
-    stmt->has_join = true;
+  // Optional JOIN clauses, chained: `JOIN t ON p (JOIN t2 ON p2)*`.
+  while (true) {
+    bool matched = Match(TokenType::JOIN);
+    if (!matched && CheckInnerJoin()) {
+      Advance();  // 'inner'
+      Advance();  // 'JOIN'
+      matched = true;
+    }
+    if (!matched) break;
+
+    JoinClause clause;
     if (!Expect(TokenType::IDENTIFIER, "expected table name after 'JOIN'")) return nullptr;
-    stmt->join_table = Previous().lexeme;
+    clause.table_name = Previous().lexeme;
     if (!Expect(TokenType::ON, "expected 'ON' after joined table")) return nullptr;
-    stmt->join_predicate = ParseExpression();
-    if (!stmt->join_predicate) return nullptr;
+    clause.on = ParseExpression();
+    if (!clause.on) return nullptr;
+    stmt->joins.push_back(std::move(clause));
   }
 
   // Optional WHERE

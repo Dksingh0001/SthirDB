@@ -25,6 +25,8 @@ class Parser {
   bool Check(TokenType type) const;
   bool Match(TokenType type);
   bool Expect(TokenType type, const std::string& msg);
+  // True when the input is the legacy `inner join` spelling at the cursor.
+  bool CheckInnerJoin() const;
 
   // Statement parsers
   std::unique_ptr<CreateTableStmt> ParseCreateTable();
