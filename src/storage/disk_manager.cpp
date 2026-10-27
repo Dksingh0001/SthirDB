@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -71,6 +72,12 @@ namespace {
 
 }  // namespace
 
+// Phase 7: shared across every DiskManager (tables, indexes, WAL pages).
+static std::atomic<uint64_t> g_pages_read{0};
+
+uint64_t DiskManager::TotalReads() { return g_pages_read.load(std::memory_order_relaxed); }
+void DiskManager::ResetReads() { g_pages_read.store(0, std::memory_order_relaxed); }
+
 DiskManager::DiskManager(std::string db_file) : path_(std::move(db_file)) {
   fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_BINARY, 0644);
   if (fd_ < 0) ThrowErrno("cannot open", path_);
@@ -88,6 +95,7 @@ void DiskManager::read_page(uint32_t page_id, char* out) {
     std::memset(out, 0, kPageSize);
     return;
   }
+  g_pages_read.fetch_add(1, std::memory_order_relaxed);  // Phase 7 evidence counter
   const uint64_t offset = static_cast<uint64_t>(page_id) * kPageSize;
   size_t done = 0;
   while (done < kPageSize) {

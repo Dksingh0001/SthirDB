@@ -392,6 +392,13 @@ std::unique_ptr<Executor> ExecutionEngine::BuildExecutorTree(const PlanNode* pla
 }
 
 ExecutionResult ExecutionEngine::Execute(const std::string& sql) {
+  const uint64_t before = DiskManager::TotalReads();
+  ExecutionResult res = ExecuteStatement(sql);
+  res.pages_read = static_cast<size_t>(DiskManager::TotalReads() - before);
+  return res;
+}
+
+ExecutionResult ExecutionEngine::ExecuteStatement(const std::string& sql) {
   ExecutionResult res;
 
   Lexer lexer(sql);

@@ -31,6 +31,12 @@ class DiskManager {
   uint32_t num_pages() const { return num_pages_; }
   const std::string& path() const { return path_; }
 
+  // Phase 7: process-wide count of pages actually read from disk across every
+  // DiskManager instance. Used for the Novelty-1 A-vs-B evidence (EXPLAIN +
+  // pages-read), so the optimizer's page-I/O claims are measurable.
+  static uint64_t TotalReads();
+  static void ResetReads();
+
  private:
   // The single low-level write path for all page writes.
   void WriteAt(uint64_t offset, const char* buf, size_t n);

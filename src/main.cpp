@@ -233,6 +233,8 @@ int CmdOptimizer(const std::string& sql, bool force_seq = false, bool force_inde
   std::snprintf(buf, sizeof(buf), "%.3f", res.actual_time_ms);
   add("actual_time_ms", buf);
   add("rows_actual", std::to_string(res.rows_actual));
+  std::snprintf(buf, sizeof(buf), "%zu", res.pages_read);
+  add("pages_read", buf);
   for (const auto& alternative : res.alternatives) {
     std::snprintf(buf, sizeof(buf), "cost=%.1f rows=%.0f", alternative.cost, alternative.rows);
     add("rejected " + alternative.name, buf);
