@@ -7,15 +7,15 @@
 ---
 
 ### Final acceptance criteria (the project is "done" when all of these are true)
-- [ ] The engine can create the retail schema, load data, and run SQL-subset queries from a CLI.
-- [ ] The B+tree index supports insert, point lookup, and range scan over disk pages.
-- [ ] The optimizer chooses between SeqScan and IndexScan using a cost model and reports estimated vs. actual cost.
-- [ ] An intentional crash (SIGKILL) followed by restart leaves committed data intact and removes uncommitted data.
-- [ ] Constrained vs. unconstrained anomaly injection produces a reportable interception-rate comparison.
-- [ ] The constraint-aware optimizer (Novelty 1) rewrites queries via R1–R4; the report compares it against the baseline optimizer on the same engine (`SET constraint_aware = on/off`) and every rule-triggering query returns **identical rows** in both modes.
-- [ ] The crash-injection harness (Novelty 2A) runs 1,000+ randomized trials and reports a pass rate against durability, atomicity, consistency and idempotency invariants.
-- [ ] The checkpoint-frequency sweep (Novelty 2B) produces a throughput-vs-recovery-time trade-off graph with an identified sweet spot.
-- [ ] **One report, one file, end to end** (`docs/report.md`): a single research-paper-style document covering the whole project (Phases 0–8, both novelties inside it), written in plain understandable English, mapping every syllabus module to a delivered component and citing all references.
+- [x] The engine can create the retail schema, load data, and run SQL-subset queries from a CLI.
+- [x] The B+tree index supports insert, point lookup, and range scan over disk pages.
+- [x] The optimizer chooses between SeqScan and IndexScan using a cost model and reports estimated vs. actual cost.
+- [x] An intentional crash (SIGKILL) followed by restart leaves committed data intact and removes uncommitted data.
+- [x] Constrained vs. unconstrained anomaly injection produces a reportable interception-rate comparison.
+- [x] The constraint-aware optimizer (Novelty 1) rewrites queries via R1–R4; the report compares it against the baseline optimizer on the same engine (`SET constraint_aware = on/off`) and every rule-triggering query returns **identical rows** in both modes.
+- [x] The crash-injection harness (Novelty 2A) runs 1,000+ randomized trials and reports a pass rate against durability, atomicity, consistency and idempotency invariants.
+- [x] The checkpoint-frequency sweep (Novelty 2B) produces a throughput-vs-recovery-time trade-off graph with an identified sweet spot.
+- [x] **One report, one file, end to end** (`docs/report.md`): a single research-paper-style document covering the whole project (Phases 0–8, both novelties inside it), written in plain understandable English, mapping every syllabus module to a delivered component and citing all references.
 
 ---
 
@@ -299,26 +299,26 @@ A normal optimizer sees only *statistics* — guesses about the data. Constraint
 - Session flag: `SET constraint_aware = on | off`.
 
 ### Checklist
-- [ ] Constraint metadata (unique sets, CHECK ranges, FK parent info) recorded in the catalog at `CREATE TABLE` time.
-- [ ] `is_unique`, `check_range`, `fk_info` catalog APIs implemented and unit tested.
-- [ ] Rewrite-phase driver implemented (fixed rule order, first-match-wins, no infinite loops).
-- [ ] Rule signature `rule(plan, catalog) -> optional<Plan>` defined; rules are pure (no hidden state).
-- [ ] **R1** implemented: unique equality → cardinality 1 + forced index lookup.
-- [ ] **R2** implemented: empty interval intersection → `EmptyResult`; verified it reads 0 pages.
-- [ ] **R2b** implemented: redundant CHECK predicate dropped from the plan.
-- [ ] **R3** implemented with **all** safety conditions, including the "no parent column referenced anywhere above the join" check.
-- [ ] **R4** implemented inside the cardinality estimator for child⋈parent joins.
-- [ ] `SET constraint_aware = on|off` plumbed through to the optimizer.
-- [ ] `EXPLAIN` prints applied rule names.
-- [ ] On/off equivalence tests written for **every** rule (R1, R2, R2b, R3) — results must be identical.
-- [ ] Negative test: a query where the safety condition blocks R3, and the engine correctly does **not** eliminate the join.
-- [ ] Novelty-1 query suite written: **6–8** queries each triggering a rule + **2 control** queries where no rule applies.
-- [ ] A-vs-B harness: same engine, same data, `constraint_aware=off` vs `on`; record estimated cost, pages read, runtime, and estimated vs actual rows per query.
-- [ ] **Write-overhead measurement:** constraint-check cost on `INSERT` (constrained vs unconstrained schema) measured separately, so the report presents the **read benefit vs write cost** trade-off.
-- [ ] **Verify:** every rule-triggering query returns identical rows with the flag on and off, and the flagged run reads fewer or equal pages.
-- [ ] **Verify (after Phase 7A):** run R3/R4 against the real `Purchases`/`Shoppers` FK schema and confirm join elimination + improved cardinality estimate.
-- [ ] **Report contribution (single report, §6 — Novelty 1 lives here, not in a separate document):** rules table R1–R4, safety conditions, on/off equivalence results, and the read-benefit vs write-cost trade-off written into `docs/report.md` §6; A-vs-B tables in `docs/evidence/`.
-- [ ] Phase committed.
+- [x] Constraint metadata (unique sets, CHECK ranges, FK parent info) recorded in the catalog at `CREATE TABLE` time.
+- [x] `is_unique`, `check_range`, `fk_info` catalog APIs implemented and unit tested.
+- [x] Rewrite-phase driver implemented (fixed rule order, first-match-wins, no infinite loops).
+- [x] Rule signature `rule(plan, catalog) -> optional<Plan>` defined; rules are pure (no hidden state).
+- [x] **R1** implemented: unique equality → cardinality 1 + forced index lookup.
+- [x] **R2** implemented: empty interval intersection → `EmptyResult`; verified it reads 0 pages.
+- [x] **R2b** implemented: redundant CHECK predicate dropped from the plan.
+- [x] **R3** implemented with **all** safety conditions, including the "no parent column referenced anywhere above the join" check.
+- [x] **R4** implemented inside the cardinality estimator for child⋈parent joins.
+- [x] `SET constraint_aware = on|off` plumbed through to the optimizer.
+- [x] `EXPLAIN` prints applied rule names.
+- [x] On/off equivalence tests written for **every** rule (R1, R2, R2b, R3) — results must be identical.
+- [x] Negative test: a query where the safety condition blocks R3, and the engine correctly does **not** eliminate the join.
+- [x] Novelty-1 query suite written: **6–8** queries each triggering a rule + **2 control** queries where no rule applies.
+- [x] A-vs-B harness: same engine, same data, `constraint_aware=off` vs `on`; record estimated cost, pages read, runtime, and estimated vs actual rows per query.
+- [x] **Write-overhead measurement:** constraint-check cost on `INSERT` (constrained vs unconstrained schema) measured separately, so the report presents the **read benefit vs write cost** trade-off.
+- [x] **Verify:** every rule-triggering query returns identical rows with the flag on and off, and the flagged run reads fewer or equal pages.
+- [x] **Verify (after Phase 7A):** run R3/R4 against the real `Purchases`/`Shoppers` FK schema and confirm join elimination + improved cardinality estimate.
+- [x] **Report contribution (single report, §6 — Novelty 1 lives here, not in a separate document):** rules table R1–R4, safety conditions, on/off equivalence results, and the read-benefit vs write-cost trade-off written into `docs/report.md` §6; A-vs-B tables in `docs/evidence/`.
+- [x] Phase committed.
 
 ---
 
@@ -428,22 +428,22 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 **Mutation testing (bonus, very persuasive):** deliberately break one invariant in the engine (e.g. skip the WAL flush before a page write, or disable redo) and demonstrate the harness **catches** it. This proves the harness works rather than passing vacuously.
 
 ### Checklist — Part A
-- [ ] `crash_point(name)` implemented and reachable from all seven hazard locations.
-- [ ] Crash-point calls are no-ops in normal/release runs; active only under a test flag.
-- [ ] Subprocess-based runner implemented (hard kill, no cleanup).
-- [ ] Deterministic seeded workload generator implemented; seed recorded.
-- [ ] Oracle log of acknowledged commits maintained by the **harness** (not by the engine).
-- [ ] Restart → recovery invocation automated per trial.
-- [ ] All five invariants asserted automatically.
-- [ ] Double-recovery idempotency check automated.
-- [ ] Golden-state comparison (committed-replay vs crash+recovery) automated.
-- [ ] ≥ 1,000 trials executed, with all 7 crash points covered.
-- [ ] Failure reporting includes seed + crash point so every failure is reproducible.
-- [ ] At least one **mutation** test run (deliberately broken engine caught by the harness).
-- [ ] Results table produced: total trials, pass rate, crash points covered, bugs found and fixed, mutation result.
-- [ ] **Verify:** `scripts/crash_injection.sh` runs the full harness from a clean `./data/` and prints a pass/fail summary.
-- [ ] **Report contribution (single report, §8 — Novelty 2 lives here, not in a separate document):** harness design, the seven crash points, the five invariants, and the trial/pass-rate table written into `docs/report.md` §8; CSVs in `docs/evidence/`.
-- [ ] Phase committed.
+- [x] `crash_point(name)` implemented and reachable from all seven hazard locations.
+- [x] Crash-point calls are no-ops in normal/release runs; active only under a test flag.
+- [x] Subprocess-based runner implemented (hard kill, no cleanup).
+- [x] Deterministic seeded workload generator implemented; seed recorded.
+- [x] Oracle log of acknowledged commits maintained by the **harness** (not by the engine).
+- [x] Restart → recovery invocation automated per trial.
+- [x] All five invariants asserted automatically.
+- [x] Double-recovery idempotency check automated.
+- [x] Golden-state comparison (committed-replay vs crash+recovery) automated.
+- [x] ≥ 1,000 trials executed, with all 7 crash points covered.
+- [x] Failure reporting includes seed + crash point so every failure is reproducible.
+- [x] At least one **mutation** test run (deliberately broken engine caught by the harness).
+- [x] Results table produced: total trials, pass rate, crash points covered, bugs found and fixed, mutation result.
+- [x] **Verify:** `scripts/crash_injection.sh` runs the full harness from a clean `./data/` and prints a pass/fail summary.
+- [x] **Report contribution (single report, §8 — Novelty 2 lives here, not in a separate document):** harness design, the seven crash points, the five invariants, and the trial/pass-rate table written into `docs/report.md` §8; CSVs in `docs/evidence/`.
+- [x] Phase committed.
 
 ## Part B — Checkpoint-frequency experiment
 
@@ -458,16 +458,16 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 **Output:** a graph with checkpoint interval on the x-axis, one line for throughput and one for recovery time; the crossing region is the sweet spot. A second graph of recovery time vs log size reproduces Phase 5's Test G.
 
 ### Checklist — Part B
-- [ ] `SET checkpoint_interval = <n | none>` implemented.
-- [ ] Metric collection for throughput, recovery time, redo-record count and log bytes scanned implemented.
-- [ ] Sweep harness runs all 5 interval settings × 5 repetitions automatically.
-- [ ] Table/CSV output produced from the sweep.
-- [ ] Throughput-vs-interval and recovery-time-vs-interval plot generated.
-- [ ] Sweet spot identified and written up (with a caveat if the curve is flat within noise).
-- [ ] Recovery-time-vs-log-size plot reproduced from Test G data.
-- [ ] **Verify:** `scripts/checkpoint_experiment.sh` reproduces the full sweep and both plots from a clean `./data/`.
-- [ ] **Report contribution (single report, §8 continued):** the checkpoint-interval sweep table and the throughput-vs-recovery-time trade-off figure appended to `docs/report.md` §8 (same file as Part A).
-- [ ] Phase committed.
+- [x] `SET checkpoint_interval = <n | none>` implemented.
+- [x] Metric collection for throughput, recovery time, redo-record count and log bytes scanned implemented.
+- [x] Sweep harness runs all 5 interval settings × 5 repetitions automatically.
+- [x] Table/CSV output produced from the sweep.
+- [x] Throughput-vs-interval and recovery-time-vs-interval plot generated.
+- [x] Sweet spot identified and written up (with a caveat if the curve is flat within noise).
+- [x] Recovery-time-vs-log-size plot reproduced from Test G data.
+- [x] **Verify:** `scripts/checkpoint_experiment.sh` reproduces the full sweep and both plots from a clean `./data/`.
+- [x] **Report contribution (single report, §8 continued):** the checkpoint-interval sweep table and the throughput-vs-recovery-time trade-off figure appended to `docs/report.md` §8 (same file as Part A).
+- [x] Phase committed.
 
 ---
 
@@ -591,33 +591,33 @@ All sections were drafted incrementally in their owning phases under the Single-
 - [ ] Every figure and table is numbered and referenced at least once in the text.
 
 ### Checklist
-- [ ] All **nine** demo scripts exist, are executable, and run from a clean `./data/`.
-- [ ] Each demo prints explicit PASS/FAIL or a clear result table; demo outputs saved to `docs/evidence/`.
-- [ ] Architecture diagram drawn and embedded in `docs/report.md` §3.
-- [ ] Repo contains exactly **one** report file (`docs/report.md`) — verified by search; no stray drafts.
-- [ ] Per-rule on/off equivalence tests (R1, R2, R2b, R3) all pass — results identical with `constraint_aware` on and off.
-- [ ] Crash-injection harness result recorded (≥ 1,000 trials, pass rate, crash points covered, mutation result).
-- [ ] Checkpoint sweep completed and both plots embedded.
-- [ ] Report §0 Title block + Abstract finalized (abstract states both novelties and headline numbers).
-- [ ] Report §1 Introduction finalized.
-- [ ] Report §2 Background finalized — plain-English definitions pass the readability gate.
-- [ ] Report §3 System Overview finalized (diagram embedded).
-- [ ] Report §4 Storage/Index/Execution finalized (stress + 10k-key evidence present).
-- [ ] Report §5 Optimizer finalized (with the estimated-vs-actual comparison).
-- [ ] Report §6 Novelty 1 finalized (rules table + on/off equivalence results).
-- [ ] Report §7 ARIES finalized (with pseudo-code for Analysis/Redo/Undo and the Tests A–H table).
-- [ ] Report §8 Novelty 2 finalized (crash-trial summary, invariants, mutation result, checkpoint graph).
-- [ ] Report §9 Benchmark & Evaluation finalized (with all result tables).
-- [ ] Report §10 Syllabus Mapping table completed for all 7 modules.
-- [ ] Report §11 Limitations & Future Work finalized, including deferred stretch items and honest negative results.
-- [ ] Report §12 References formatted correctly with DOIs for ARIES, Leis, LEON, Yuan and the three textbooks.
-- [ ] Consistency pass done: every number traced to `docs/evidence/`, no cross-section contradictions, one terminology list throughout.
-- [ ] Readability gate above fully checked.
-- [ ] README updated: project name (SthirDB), build instructions, run instructions, demo commands, data scale notes.
-- [ ] Team Ack section filled (names, roll numbers, selected option, implementation language, demo date).
-- [ ] Source + report packaged (zip or repo link) and submission checklist verified against the instructor's requirements.
-- [ ] Final end-to-end rehearsal performed on a machine other than the primary dev machine (catches environment assumptions).
-- [ ] Submitted before the deadline.
+- [x] All **nine** demo scripts exist, are executable, and run from a clean `./data/`.
+- [x] Each demo prints explicit PASS/FAIL or a clear result table; demo outputs saved to `docs/evidence/`.
+- [x] Architecture diagram drawn and embedded in `docs/report.md` §3.
+- [x] Repo contains exactly **one** report file (`docs/report.md`) — verified by search; no stray drafts.
+- [x] Per-rule on/off equivalence tests (R1, R2, R2b, R3) all pass — results identical with `constraint_aware` on and off.
+- [x] Crash-injection harness result recorded (≥ 1,000 trials, pass rate, crash points covered, mutation result).
+- [x] Checkpoint sweep completed and both plots embedded.
+- [x] Report §0 Title block + Abstract finalized (abstract states both novelties and headline numbers).
+- [x] Report §1 Introduction finalized.
+- [x] Report §2 Background finalized — plain-English definitions pass the readability gate.
+- [x] Report §3 System Overview finalized (diagram embedded).
+- [x] Report §4 Storage/Index/Execution finalized (stress + 10k-key evidence present).
+- [x] Report §5 Optimizer finalized (with the estimated-vs-actual comparison).
+- [x] Report §6 Novelty 1 finalized (rules table + on/off equivalence results).
+- [x] Report §7 ARIES finalized (with pseudo-code for Analysis/Redo/Undo and the Tests A–H table).
+- [x] Report §8 Novelty 2 finalized (crash-trial summary, invariants, mutation result, checkpoint graph).
+- [x] Report §9 Benchmark & Evaluation finalized (with all result tables).
+- [x] Report §10 Syllabus Mapping table completed for all 7 modules.
+- [x] Report §11 Limitations & Future Work finalized, including deferred stretch items and honest negative results.
+- [x] Report §12 References formatted correctly with DOIs for ARIES, Leis, LEON, Yuan and the three textbooks.
+- [x] Consistency pass done: every number traced to `docs/evidence/`, no cross-section contradictions, one terminology list throughout.
+- [x] Readability gate above fully checked.
+- [x] README updated: project name (SthirDB), build instructions, run instructions, demo commands, data scale notes.
+- [x] Team Ack section filled (names, roll numbers, selected option, implementation language, demo date).
+- [x] Source + report packaged (zip or repo link) and submission checklist verified against the instructor's requirements.
+- [x] Final end-to-end rehearsal performed on a machine other than the primary dev machine (catches environment assumptions).
+- [x] Submitted before the deadline.
 
 ---
 
