@@ -523,29 +523,29 @@ uint64 undo_nxt_lsn   // only meaningful for CLR
 
 ### Checklist
 - [x] 8-table DDL written with all primary, foreign, unique, and check constraints.
-- [ ] 3NF justification written: FDs per table and an argument each that no non-trivial FD violates 3NF.
-- [ ] `CategoryName` denormalization trade-off documented (anomaly permitted, and why it is accepted).
+- [x] 3NF justification written: FDs per table and an argument each that no non-trivial FD violates 3NF.
+- [x] `CategoryName` denormalization trade-off documented (anomaly permitted, and why it is accepted).
 - [x] FK/NOT NULL metadata exposed to the Phase 4B constraint catalog (enables R3/R4 verification).
 - [x] Constraint enforcement implemented in the engine (PK, FK, UNIQUE, CHECK, ON DELETE RESTRICT/CASCADE).
 - [x] Constrained vs. unconstrained toggle implemented (single schema flag).
 - [x] Data generator produces the target scale (100k / 300k / 5k / 1k) deterministically (fixed seed).
 - [x] Anomaly injector implemented with configurable class counts (default 3 × 50).
-- [ ] Per-class interception-rate report generated for constrained and unconstrained runs.
+- [x] Per-class interception-rate report generated for constrained and unconstrained runs.
 - [x] `ON DELETE RESTRICT` behaviour verified: deleting a shopper with purchases is rejected.
 - [x] `CHECK (StockLevel >= 0)` verified: negative stock update is rejected.
 - [x] `UNIQUE (Email)` verified: duplicate registration is rejected.
-- [ ] At least one **extra** anomaly class of your own added and reported.
+- [x] At least one **extra** anomaly class of your own added and reported.
 - [x] Extended classes implemented: zero/negative `Quantity`, duplicate primary key, orphan line items.
-- [ ] Configurable injection rate (1% / 5% / 10%) implemented and at least one rate sweep reported.
-- [ ] Novelty-1 comparison evidence captured: `EXPLAIN` + pages-read for the rule-triggering queries on constrained vs unconstrained schemas.
+- [x] Configurable injection rate (1% / 5% / 10%) implemented and at least one rate sweep reported.
+- [x] Novelty-1 comparison evidence captured: `EXPLAIN` + pages-read for the rule-triggering queries on constrained vs unconstrained schemas.
 - [x] Concurrent benchmark harness implemented (thread counts 100/300/500, fixed query).
-- [ ] Latency measurement (average + P99) and failure counting collected per run.
-- [ ] `EXPLAIN` output captured for the benchmark query on both schemas.
-- [ ] Results tables produced for the report (constrained vs. unconstrained × 3 thread counts).
-- [ ] Analysis written: interception rates, latency comparison, why your numbers differ from Yuan's, what that says about the trade-off.
-- [ ] **Verify:** one end-to-end benchmark script (`scripts/benchmark.sh`) reproduces the full result set from a clean `./data/`.
-- [ ] **Report contribution (single report, §9):** anomaly interception tables, latency tables, `EXPLAIN` evidence, and the Yuan-2026 comparison paragraph written into `docs/report.md` §9; all raw tables in `docs/evidence/`.
-- [ ] Phase committed.
+- [x] Latency measurement (average + P99) and failure counting collected per run.
+- [x] `EXPLAIN` output captured for the benchmark query on both schemas.
+- [x] Results tables produced for the report (constrained vs. unconstrained × 3 thread counts).
+- [x] Analysis written: interception rates, latency comparison, why your numbers differ from Yuan's, what that says about the trade-off.
+- [x] **Verify:** one end-to-end benchmark script (`scripts/benchmark.sh`) reproduces the full result set from a clean `./data/`.
+- [x] **Report contribution (single report, §9):** anomaly interception tables, latency tables, `EXPLAIN` evidence, and the Yuan-2026 comparison paragraph written into `docs/report.md` §9; all raw tables in `docs/evidence/`.
+- [x] Phase committed.
 
 ---
 
