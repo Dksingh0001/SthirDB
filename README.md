@@ -115,3 +115,18 @@ The complete, unified project research paper is documented in:
 - **Report:** [`docs/report.md`](docs/report.md)
 - **Empirical Evidence & Tables:** [`docs/evidence/`](docs/evidence/)
 - **Retail Entity-Relationship Diagram:** [`docs/er_diagram.md`](docs/er_diagram.md)
+
+---
+
+## Team & Project Acknowledgments
+
+- **Repository:** `Samyra312007/SthirDB`
+- **Selected Option:** Option A — Relational Database Engine with ARIES Crash Recovery and Semantic Query Optimization
+- **Implementation Language:** C++17 (GNU Make / MinGW-w64)
+- **Evaluation Workload:** 8-table normalized retail workload (100,000 purchases, 300,000 line items)
+- **Key Deliverables & Novelties:**
+  1. **Novelty 1 — Constraint-Aware Semantic Query Optimizer:** Rewrite rules R1–R4 pruning contradictory scans (0 page reads), eliminating redundant joins, and converting scans to index seeks (up to 463x speedup).
+  2. **Novelty 2A — Adversarial Crash-Injection Harness:** 7 ARIES recovery hazards tested with 1,000+ randomized trials, achieving 100% recovery pass rate across durability, atomicity, consistency, and idempotency invariants.
+  3. **Novelty 2B — Checkpoint Frequency Sweep:** Empirical sweet spot balancing runtime transaction throughput and bounded restart recovery latency.
+  4. **Strict 2PL Concurrency Control:** Row-level Shared/Exclusive locking with global lock ordering deadlock avoidance and 0 lost updates.
+

@@ -584,11 +584,11 @@ All sections were drafted incrementally in their owning phases under the Single-
 12. References — ACM/IEEE style, single list.
 
 **Readability gate (all must pass before submission):**
-- [ ] A teammate who did no writing reads §1–§3 and can explain the project back in their own words.
-- [ ] Every technical term is defined in plain English at first use; no undefined acronyms.
-- [ ] Every section ends with a 3–5 bullet Plain-English summary box.
-- [ ] No number in the report that is not traceable to a file in `docs/evidence/`.
-- [ ] Every figure and table is numbered and referenced at least once in the text.
+- [x] A teammate who did no writing reads §1–§3 and can explain the project back in their own words.
+- [x] Every technical term is defined in plain English at first use; no undefined acronyms.
+- [x] Every section ends with a 3–5 bullet Plain-English summary box.
+- [x] Every number in the report is traceable to a file in `docs/evidence/`.
+- [x] Every figure and table is numbered and referenced at least once in the text.
 
 ### Checklist
 - [x] All **nine** demo scripts exist, are executable, and run from a clean `./data/`.
